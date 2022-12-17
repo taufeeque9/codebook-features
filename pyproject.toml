@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "codebook-features"
+version = "0.1.0"
+description = "The Codebook Features Library"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{include = "codebook_features"}]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+torch = "^1.13.1"
+transformers = "^4.25.1"
+datasets = "^2.7.1"
+scikit-learn = "^1.2.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.2.0"
+pre-commit = "^2.20.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
