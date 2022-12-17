@@ -64,10 +64,3 @@ repos:
     require_serial: true
     # Print the number of files as a sanity-check
     verbose: true
-  - id: pytype
-    name: pytype
-    language: system
-    types: [python]
-    entry: "bash -c 'pytype -j ${NUM_CPUS:-auto}'"
-    require_serial: true
-    verbose: true
