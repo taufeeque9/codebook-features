@@ -1,0 +1,12 @@
+output_dir: output
+overwrite_output_dir: True
+model_name_or_path: gpt2
+dataset_name: wikitext
+dataset_config_name: wikitext-2-raw-v1
+max_train_samples: 2
+max_eval_samples: 2
+do_train: True
+do_eval: False
+get_baseline: False
+max_steps: 1
+snap_layers: [-4, 3, -2]
