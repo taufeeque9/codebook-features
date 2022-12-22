@@ -239,7 +239,14 @@ class DataTrainingArguments:
                 ], "`validation_file` should be a csv, a json or a txt file."
 
 
-def main(model_args, data_args, training_args, model=None, optimizers=(None, None), callbacks=None):
+def main(
+    model_args,
+    data_args,
+    training_args,
+    model=None,
+    optimizers=(None, None),
+    callbacks=None,
+):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
