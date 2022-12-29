@@ -13,34 +13,39 @@ from codebook_features import models, run_clm
 
 @hydra.main(config_path="config", config_name="main")
 def main(cfg):
+    """Train codebook based models parametrized using hydra.
 
-    training_args = transformers.TrainingArguments(cfg["output_dir"])
-    model_args = run_clm.ModelArguments()
-    data_args = run_clm.DataTrainingArguments(cfg["dataset_name"])
-    for k, v in cfg.items():
-        if hasattr(training_args, k):
-            setattr(training_args, k, v)
-        elif hasattr(model_args, k):
-            setattr(model_args, k, v)
-        elif hasattr(data_args, k):
-            setattr(data_args, k, v)
-        # else:
-        #     raise ValueError(f"Argument `{k}` not found.")
+    Args:
+        cfg: hydra config.
 
-    model = transformers.GPT2LMHeadModel.from_pretrained("gpt2")
+    Returns: tuple of metrics for trained model and the baseline metrics.
+    """
+    training_args = transformers.TrainingArguments(**cfg.training_args)
+    model_args = run_clm.ModelArguments(**cfg.model_args)
+    data_args = run_clm.DataTrainingArguments(**cfg.data_args)
+
+    model = transformers.GPT2LMHeadModel.from_pretrained(
+        cfg.model_args.model_name_or_path,
+    )
 
     if cfg.get_baseline:
         eval_output_dir = training_args.output_dir + "_baseline"
         eval_args = dataclasses.replace(
-            training_args, output_dir=eval_output_dir, do_train=False, do_eval=True
+            training_args,
+            output_dir=eval_output_dir,
+            do_train=False,
+            do_eval=True,
         )
         baseline_metrics = run_clm.main(
-            model_args, data_args, training_args=eval_args, model=model
+            model_args,
+            data_args,
+            training_args=eval_args,
+            model=model,
         )
     else:
         baseline_metrics = None
 
-    model = models.GPT2CodebookModel(model, 100, cfg.snap_layers)
+    model = models.GPT2CodebookModel(model, 100, cfg.layers_to_snap)
 
     optimizer = torch.optim.AdamW(
         model.get_codebook_params(),

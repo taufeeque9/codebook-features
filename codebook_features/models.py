@@ -2,28 +2,45 @@
 
 import abc
 from collections import Counter
+from typing import Optional, Sequence
 
 import torch
 from sklearn.cluster import KMeans
 from torch import nn
 
 
-# A version of the embedding module that can be initialized
-# to the kmeans of batched data
 class KmeansEmbedding(nn.Embedding):
+    """Embedding module that can be initialized to the kmeans of batched data."""
+
     def __init__(
         self,
-        num_embeddings,
-        embedding_dim,
-        padding_idx=None,
-        max_norm=None,
-        norm_type=2.0,
-        scale_grad_by_freq=False,
-        sparse=False,
-        _weight=None,
+        num_embeddings: int,
+        embedding_dim: int,
+        padding_idx: Optional[int] = None,
+        max_norm: Optional[float] = None,
+        norm_type: float = 2.0,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
+        _weight: Optional[torch.Tensor] = None,
         device=None,
         dtype=None,
     ):
+        """Create K-Means Embedding.
+
+        Args:
+            num_embeddings: size of the dictionary of embeddings
+            embedding_dim: the size of each embedding vector
+            padding_idx: padding index. Defaults to None.
+            max_norm: If given, each embedding vector with norm larger than :attr:`max_norm`
+                is renormalized to have norm :attr:`max_norm`. Defaults to None.
+            norm_type: The p of the p-norm to compute for the :attr:`max_norm` option. Defaults to 2.0.
+            scale_grad_by_freq: If given, this will scale gradients by the inverse of frequency of
+                the words in the mini-batch. Defaults to False.
+            sparse: If ``True``, gradient w.r.t. :attr:`weight` matrix will be a sparse tensor. Defaults to False.
+            _weight: the learnable weights of the module. Defaults to None.
+            device: device to put torch tensors on. Defaults to None.
+            dtype: data type of embedding. Defaults to None.
+        """
         super().__init__(
             num_embeddings,
             embedding_dim,
@@ -38,16 +55,24 @@ class KmeansEmbedding(nn.Embedding):
         )
         self.data = None
 
-    # Load a batch of data
-    def load_data(self, data):
+    def load_data(self, data: torch.Tensor):
+        """Load a batch of data.
+
+        Args:
+            data: batch of data.
+        """
         with torch.no_grad():
             if self.data is None:
                 self.data = data
             else:
                 self.data = torch.cat([self.data, data], dim=0)
 
-    # After the data has been loaded, call initialize
-    def initialize(self, k):
+    def initialize(self, k: int):
+        """Initialize the embeddings after all the data is loaded.
+
+        Args:
+            k: number of cluster centers for K-Means.
+        """
         kmeans = KMeans(n_clusters=k)
         kmeans = kmeans.fit(self.data.detach().cpu().numpy())
         self._weight = torch.from_numpy(kmeans.cluster_centers_)
@@ -55,53 +80,91 @@ class KmeansEmbedding(nn.Embedding):
 
 
 class SnapFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, codebook):
-        logits = torch.matmul(input, codebook.T)
-        codebook_ids = logits.argmax(-1)
-        with torch.enable_grad():
-            output = torch.nn.functional.embedding(codebook_ids, codebook)
-        ctx.save_for_backward(codebook, output)
-        return output.detach().clone(), codebook_ids
+    """Autograd Fn to snap input to closest codebook feature."""
 
     @staticmethod
-    def backward(ctx, grad_output, grad_codebook_ids):
+    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor):
+        """Compute output of the snap function.
+
+        Replaces each dimension vector of input with features from codebook
+        having highest dot-product.
+
+        Args:
+            ctx: torch context used for efficiently storing tensors for backward pass.
+            inputs: input data.
+            codebook: codebook matrix. Shape: (num_features, hidden_dim_size).
+
+        Returns: tuple of output of snap function and the IDs of closest codebook features.
+        """
+        logits = torch.matmul(inputs, codebook.T)
+        codebook_ids = logits.argmax(-1)
+        # enable gradient so that outputs.grad_fn can be used in backward pass.
+        with torch.enable_grad():
+            outputs = torch.nn.functional.embedding(codebook_ids, codebook)
+        ctx.save_for_backward(codebook, outputs)
+        # detach & clone outputs since the returned tensor's grad_fn will be
+        # overridden by SnapFunction.backward and we don't want the above
+        # outputs.grad_fn to be overridden.
+        return outputs.detach().clone(), codebook_ids
+
+    @staticmethod
+    def backward(ctx, grad_outputs, grad_codebook_ids):
+        """Backward pass for the snap function using straight-through operator.
+
+        Args:
+            ctx: torch context used for efficiently storing tensors for backward pass.
+            grad_outputs: gradient tensor of the outputs.
+            grad_codebook_ids: gradient tensor of `codebook_ids`.
+
+        Returns: tuple of gradient tensor wrt `inputs` and `codebook` tensors.
+        """
         codebook, output = ctx.saved_tensors
-        grad_codebook = torch.autograd.grad(output, codebook, grad_output)[0]
+        grad_codebook = torch.autograd.grad(output, codebook, grad_outputs)[0]
         # straight through estimator
-        return grad_output, grad_codebook
+        return grad_outputs, grad_codebook
 
 
 class CodebookLayer(nn.Module):
-    def __init__(self, dim, num_codes, kmeans_init=False, tau=0):
+    """Codebook layer module."""
+
+    def __init__(
+        self,
+        dim: int,
+        num_codes: int,
+        kmeans_init=False,
+        soft_snap: bool = False,
+    ):
+        """Create the codebook layer.
+
+        Args:
+            dim: dimension size of the codebook features.
+            num_codes: number of codebook features to have.
+            kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
+            soft_snap: whether to snap the input using softmax. Defaults to False.
+        """
         super().__init__()
         if kmeans_init:
             self.codebook = KmeansEmbedding(num_embeddings=num_codes, embedding_dim=dim)
         else:
             self.codebook = nn.Embedding(num_embeddings=num_codes, embedding_dim=dim)
         self.counts = Counter()
-        self.tau = tau
-
-    def get_code(self, x):
-        # [batch_size, n_channels, num_codes]
-        logits = torch.matmul(x, self.codebook.weight.T)
-        # Was previously doing gumbel softmax--not anymore.
-        # codebook_ids = torch.nn.functional.gumbel_softmax(
-        #   logits, hard=True).argmax(-1)
-        codebook_ids = logits.argmax(-1)
-        return codebook_ids
+        self.soft_snap = soft_snap
 
     def forward(self, x):
         """Snaps activations to elements in the codebook.
-        Expects input x of size [batch_size, n_channels, dim].
+
+        Args:
+            x: input tensor of shape: (batch_size, n_channels, dim).
+
+        Returns: output with the feature vectors replaced using the codebook.
         """
         # [batch_size, n_channels, num_codes]
         assert len(x.shape) == 3
-        if self.tau <= 0:
+        if not self.soft_snap:
             # Hard choice of a single codebook vector
             output, codebook_ids = SnapFunction.apply(x, self.codebook.weight)
             self.counts.update(codebook_ids.cpu().numpy().flat)
-        elif self.tau == 1:
+        else:
             # NOTE: was previously doing a gumbel softmax,
             # but found this was not necessary
             # codebook_weights = torch.nn.functional.gumbel_softmax(
@@ -116,13 +179,13 @@ class CodebookLayer(nn.Module):
             output = output.sum(-2)  # codebook size
         return output
 
-    def expire_code(self, code_id):
-        # Generate a new code
-        # replace code_id
-        pass
-
     # TODO: Consider using a fraction for the threshold instead of an absolute number
-    def expire_codes(self, threshold=1):
+    def expire_codes(self, threshold: int = 1):
+        """re-initialize the codebook features with activation count below threshold.
+
+        Args:
+            threshold: minimum count for feature vector to not get replaced. Defaults to 1.
+        """
         underused_codes = set()
         for i in range(self.codebook.weight.size(0)):
             if i not in self.counts or self.counts[i] < threshold:
@@ -133,7 +196,7 @@ class CodebookLayer(nn.Module):
             weights = weights.to(self.codebook.weight.device)
             new_codes = torch.einsum("uc,cd->ud", weights, self.codebook.weight)
             underused_codes = torch.tensor(list(underused_codes)).to(
-                self.codebook.weight.device
+                self.codebook.weight.device,
             )
             try:
                 self.codebook.weight[underused_codes] = new_codes
@@ -142,13 +205,27 @@ class CodebookLayer(nn.Module):
 
 
 class TransformerLayerWrapper(nn.Module):
-    def __init__(self, transformer_layer, snap=False, dim=None, num_codes=None):
+    """Wraps a transformer layer module by applying codebooks on the output of the layer."""
+
+    def __init__(self, transformer_layer: nn.Module, dim: int, num_codes: int):
+        """Create the transformer layer wrapped with the codebook.
+
+        Args:
+            transformer_layer (_type_): _description_
+            dim: dimension size of the codebook features.
+            num_codes: number of codebook features to have.
+        """
         super().__init__()
         self.transformer_layer = transformer_layer
-        self.snap = snap
         self.codebook_layer = CodebookLayer(dim, num_codes)
+        self.snap = True
 
     def forward(self, *args, **kwargs):
+        """Forward function for the wrapped layer.
+
+        Returns: output using codebook features if `snap` is enabled otherwise
+            returns the output of the transformer layer.
+        """
         layer_outputs = self.transformer_layer(*args, **kwargs)
         if self.snap:
             snapped_output = self.codebook_layer(layer_outputs[0])
@@ -158,82 +235,130 @@ class TransformerLayerWrapper(nn.Module):
 
 
 class CodebookModel(nn.Module, abc.ABC):
-    def __init__(self, model, num_codes, snap_layers=[]) -> None:
+    """ABC for a model containing codebook features."""
+
+    def __init__(
+        self,
+        model: nn.Module,
+        num_codes: int,
+        layers_to_snap: Sequence = [],
+    ) -> None:
+        """Build the codebook based model.
+
+        Args:
+            model: torch model to apply codebooks to.
+            num_codes: number of codebook features to have.
+            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
+                Defaults to []. Can contain negative numbers to index from the last layers.
+        """
         super().__init__()
         self.model = model
         self.num_codes = num_codes
-        self.snap_layers = snap_layers
+        self.layers_to_snap = layers_to_snap
         num_layers = self.num_layers()
-        for i in range(len(self.snap_layers)):
+        for i in range(len(self.layers_to_snap)):
             assert -num_layers <= i and i < num_layers
-            if self.snap_layers[i] < 0:
-                self.snap_layers[i] += self.num_layers()
-        self.snap_layers = sorted(self.snap_layers)
+            if self.layers_to_snap[i] < 0:
+                self.layers_to_snap[i] += self.num_layers()
+        self.layers_to_snap = sorted(self.layers_to_snap)
         self.codebook_params = []
 
     def add_codebooks(self):
+        """Adds codebooks for the layers that are to be snapped."""
         layers = self.layers()
         for i in range(len(layers)):
-            if i in self.snap_layers:
+            if i in self.layers_to_snap:
                 layers[i] = TransformerLayerWrapper(
                     layers[i],
-                    snap=True,
                     dim=self.model.config.hidden_size,
                     num_codes=self.num_codes,
                 )
                 self.codebook_params += list(
-                    layers[i].codebook_layer.codebook.parameters()
+                    layers[i].codebook_layer.codebook.parameters(),
                 )
 
+    def enable_codebooks(self):
+        """Enable the use of codebooks in all the layers to snap."""
+        for i, layer in enumerate(self.layers()):
+            if i in self.layers_to_snap:
+                layer.snap = True
+
+    def disable_codebooks(self):
+        """Disable the use of codebooks in all the layers."""
+        for i, layer in enumerate(self.layers()):
+            if i in self.layers_to_snap:
+                layer.snap = False
+
     def get_codebook_params(self):
+        """Gets codebook parameters."""
         return self.codebook_params
 
     def get_input_embeddings(self):
+        """Gets input embeddings of the model."""
         return self.model.get_input_embeddings()
 
     @abc.abstractmethod
     def layers(self):
+        """Returns the list of transformer layers of the model."""
         pass
 
     @abc.abstractmethod
     def num_layers(self):
+        """Returns the number of transformer layers in the model."""
         pass
 
 
-class BERTCodebookModel(CodebookModel):
-    def __init__(self, model, num_codes, snap_layers=[]):
-        super().__init__(model, num_codes, snap_layers)
-        self.add_codebooks()
+class BertCodebookModel(CodebookModel):
+    """Codebook model for Bert-based models."""
 
-    def forward(self, *args, **kwargs):
-        return self.model(*args, **kwargs)
+    def __init__(self, model, num_codes, layers_to_snap=[]):
+        """Build the codebook based model.
 
-    def num_layers(self):
-        return self.model.config.num_hidden_layers
-
-    def layers(self):
-        return self.model.bert.encoder.layer
-
-
-class GPT2CodebookModel(CodebookModel):
-    def __init__(self, model, num_codes, snap_layers=[]):
-        super().__init__(model, num_codes, snap_layers)
+        Args:
+            model: bert model to apply codebooks to.
+            num_codes: number of codebook features to have.
+            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
+                Defaults to []. Can contain negative numbers to index from the last layers.
+        """
+        super().__init__(model, num_codes, layers_to_snap)
         self.add_codebooks()
         self.forward = self.model.forward
 
     # def forward(self, *args, **kwargs):
     #     return self.model(*args, **kwargs)
 
-    def use_codebooks(self):
-        for layer in self.layers():
-            layer.snap = True
+    def layers(self):
+        """Returns the list of transformer layers of the model."""
+        return self.model.bert.encoder.layer
 
-    def use_orig_model(self):
-        for layer in self.layers():
-            layer.snap = False
+    def num_layers(self):
+        """Returns the number of transformer layers in the model."""
+        return self.model.config.num_hidden_layers
+
+
+class GPT2CodebookModel(CodebookModel):
+    """Codebook model for GPT2."""
+
+    def __init__(self, model, num_codes, layers_to_snap=[]):
+        """Build the codebook based model.
+
+        Args:
+            model: GPT2 model to apply codebooks to.
+            num_codes: number of codebook features to have.
+            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
+                Defaults to []. Can contain negative numbers to index from the last layers.
+        """
+        super().__init__(model, num_codes, layers_to_snap)
+        self.add_codebooks()
+        self.forward = self.model.forward
+
+    # def forward(self, *args, **kwargs):
+    #     return self.model(*args, **kwargs)
 
     def layers(self):
+        """Returns the list of transformer layers of the model."""
         return self.model.transformer.h
 
     def num_layers(self):
+        """Returns the number of transformer layers in the model."""
         return self.model.config.n_layer

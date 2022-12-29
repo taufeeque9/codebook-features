@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
+Taken from https://github.com/huggingface/transformers/blob/main/examples/pytorch/language-modeling/run_clm.py.
+Added option to stream dataset and modified main function so that it can be imported across modules.
+
 Fine-tuning the library models for causal language modeling (GPT, GPT-2, CTRL, ...) on a text file or a dataset.
 
 Here is the full list of checkpoints on the hub that can be fine-tuned by this script:
@@ -34,9 +37,16 @@ import evaluate
 import transformers
 from datasets import load_dataset
 from transformers import (  # HfArgumentParser,; TrainingArguments,
-    CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig,
-    AutoModelForCausalLM, AutoTokenizer, Trainer, default_data_collator,
-    is_torch_tpu_available, set_seed)
+    CONFIG_MAPPING,
+    MODEL_FOR_CAUSAL_LM_MAPPING,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    Trainer,
+    default_data_collator,
+    is_torch_tpu_available,
+    set_seed,
+)
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
@@ -240,13 +250,25 @@ class DataTrainingArguments:
 
 
 def main(
-    model_args,
-    data_args,
-    training_args,
+    model_args: ModelArguments,
+    data_args: DataTrainingArguments,
+    training_args: transformers.TrainingArguments,
     model=None,
     optimizers=(None, None),
     callbacks=None,
 ):
+    """Function to train/evaluate CLMs.
+
+    Args:
+        model_args: model arguments.
+        data_args: data arguments.
+        training_args: training arguments.
+        model: model to train/evaluate. Defaults to None in which case model is loaded using `model_args`.
+        optimizers: tuple of model optimizer and learning rate scheduler.
+        callbacks: list of callbacks for transformers based training/evaluation. Defaults to None.
+
+    Returns: If evaluating then evaluation metrics of the final model and if not, then train metrics.
+    """
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.

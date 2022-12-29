@@ -43,7 +43,7 @@ def test_straight_through_gradient_flows():
         max_train_samples=2,
     )
     model = transformers.GPT2LMHeadModel.from_pretrained("gpt2")
-    model = models.GPT2CodebookModel(model, 2, [-1, -2])
+    model = models.GPT2CodebookModel(model, 2, [-1, -2, -5])
     optimizer = GradientCheckerOptimizer(model.get_codebook_params())
     metrics = run_clm.main(
         model_args,
