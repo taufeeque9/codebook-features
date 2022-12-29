@@ -21,17 +21,13 @@ repos:
   hooks:
   - id: isort
 # Python static analysis
-- repo: https://github.com/pycqa/flake8
-  rev: '5.0.4'
+- repo: https://github.com/charliermarsh/ruff-pre-commit
+  # Ruff version.
+  rev: 'v0.0.199'
   hooks:
-  - id: flake8
-    additional_dependencies:
-      - darglint~=1.8.1
-      - flake8-blind-except==0.2.1
-      - flake8-builtins~=1.5.3
-      - flake8-commas~=2.1.0
-      - flake8-debugger~=4.1.2
-      - flake8-docstrings~=1.6.0
+    - id: ruff
+      # Respect `exclude` and `extend-exclude` settings.
+      args: ["--force-exclude"]
 # Shell static analysis
 - repo: https://github.com/koalaman/shellcheck-precommit
   rev: v0.8.0
