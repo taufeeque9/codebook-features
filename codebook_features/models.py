@@ -28,6 +28,7 @@ class KmeansEmbedding(nn.Embedding):
         """Create K-Means Embedding.
 
         Args:
+        ----
             num_embeddings: size of the dictionary of embeddings
             embedding_dim: the size of each embedding vector
             padding_idx: padding index. Defaults to None.
@@ -59,6 +60,7 @@ class KmeansEmbedding(nn.Embedding):
         """Load a batch of data.
 
         Args:
+        ----
             data: batch of data.
         """
         with torch.no_grad():
@@ -71,6 +73,7 @@ class KmeansEmbedding(nn.Embedding):
         """Initialize the embeddings after all the data is loaded.
 
         Args:
+        ----
             k: number of cluster centers for K-Means.
         """
         kmeans = KMeans(n_clusters=k)
@@ -90,6 +93,7 @@ class SnapFunction(torch.autograd.Function):
         having highest dot-product.
 
         Args:
+        ----
             ctx: torch context used for efficiently storing tensors for backward pass.
             inputs: input data.
             codebook: codebook matrix. Shape: (num_features, hidden_dim_size).
@@ -112,6 +116,7 @@ class SnapFunction(torch.autograd.Function):
         """Backward pass for the snap function using straight-through operator.
 
         Args:
+        ----
             ctx: torch context used for efficiently storing tensors for backward pass.
             grad_outputs: gradient tensor of the outputs.
             grad_codebook_ids: gradient tensor of `codebook_ids`.
@@ -137,6 +142,7 @@ class CodebookLayer(nn.Module):
         """Create the codebook layer.
 
         Args:
+        ----
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
@@ -147,6 +153,7 @@ class CodebookLayer(nn.Module):
             self.codebook = KmeansEmbedding(num_embeddings=num_codes, embedding_dim=dim)
         else:
             self.codebook = nn.Embedding(num_embeddings=num_codes, embedding_dim=dim)
+        self.num_codes = num_codes
         self.counts = Counter()
         self.soft_snap = soft_snap
 
@@ -154,6 +161,7 @@ class CodebookLayer(nn.Module):
         """Snaps activations to elements in the codebook.
 
         Args:
+        ----
             x: input tensor of shape: (batch_size, n_channels, dim).
 
         Returns: output with the feature vectors replaced using the codebook.
@@ -184,6 +192,7 @@ class CodebookLayer(nn.Module):
         """re-initialize the codebook features with activation count below threshold.
 
         Args:
+        ----
             threshold: minimum count for feature vector to not get replaced. Defaults to 1.
         """
         underused_codes = set()
@@ -211,6 +220,7 @@ class TransformerLayerWrapper(nn.Module):
         """Create the transformer layer wrapped with the codebook.
 
         Args:
+        ----
             transformer_layer (_type_): _description_
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
@@ -241,11 +251,12 @@ class CodebookModel(nn.Module, abc.ABC):
         self,
         model: nn.Module,
         num_codes: int,
-        layers_to_snap: Sequence = [],
+        layers_to_snap: Sequence = (),
     ) -> None:
         """Build the codebook based model.
 
         Args:
+        ----
             model: torch model to apply codebooks to.
             num_codes: number of codebook features to have.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
@@ -254,7 +265,7 @@ class CodebookModel(nn.Module, abc.ABC):
         super().__init__()
         self.model = model
         self.num_codes = num_codes
-        self.layers_to_snap = layers_to_snap
+        self.layers_to_snap = list(layers_to_snap)
         num_layers = self.num_layers()
         for i in range(len(self.layers_to_snap)):
             assert -num_layers <= i and i < num_layers
@@ -262,6 +273,7 @@ class CodebookModel(nn.Module, abc.ABC):
                 self.layers_to_snap[i] += self.num_layers()
         self.layers_to_snap = sorted(self.layers_to_snap)
         self.codebook_params = []
+        self.all_codebooks = {}
 
     def add_codebooks(self):
         """Adds codebooks for the layers that are to be snapped."""
@@ -276,6 +288,7 @@ class CodebookModel(nn.Module, abc.ABC):
                 self.codebook_params += list(
                     layers[i].codebook_layer.codebook.parameters(),
                 )
+                self.all_codebooks[i] = layers[i].codebook_layer
 
     def enable_codebooks(self):
         """Enable the use of codebooks in all the layers to snap."""
@@ -311,10 +324,11 @@ class CodebookModel(nn.Module, abc.ABC):
 class BertCodebookModel(CodebookModel):
     """Codebook model for Bert-based models."""
 
-    def __init__(self, model, num_codes, layers_to_snap=[]):
+    def __init__(self, model, num_codes, layers_to_snap=()):
         """Build the codebook based model.
 
         Args:
+        ----
             model: bert model to apply codebooks to.
             num_codes: number of codebook features to have.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
@@ -339,10 +353,11 @@ class BertCodebookModel(CodebookModel):
 class GPT2CodebookModel(CodebookModel):
     """Codebook model for GPT2."""
 
-    def __init__(self, model, num_codes, layers_to_snap=[]):
+    def __init__(self, model, num_codes, layers_to_snap=()):
         """Build the codebook based model.
 
         Args:
+        ----
             model: GPT2 model to apply codebooks to.
             num_codes: number of codebook features to have.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.

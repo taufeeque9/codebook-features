@@ -13,9 +13,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# flake8: noqa
 """
 Taken from https://github.com/huggingface/transformers/blob/main/examples/pytorch/language-modeling/run_clm.py.
-Added option to stream dataset and modified main function so that it can be imported across modules.
+Added option to stream dataset and modified main function so that it can be imported across modules. Trainer is
+also modified by importing from codebook_features.trainer.
 
 Fine-tuning the library models for causal language modeling (GPT, GPT-2, CTRL, ...) on a text file or a dataset.
 
@@ -37,13 +39,21 @@ import evaluate
 import transformers
 from datasets import load_dataset
 from transformers import (  # HfArgumentParser,; TrainingArguments,
-    CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig,
-    AutoModelForCausalLM, AutoTokenizer, Trainer, default_data_collator,
-    is_torch_tpu_available, set_seed)
+    CONFIG_MAPPING,
+    MODEL_FOR_CAUSAL_LM_MAPPING,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    default_data_collator,
+    is_torch_tpu_available,
+    set_seed,
+)
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
+
+from codebook_features import trainer as codebook_trainer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.25.1")
@@ -459,7 +469,7 @@ def main(
         else:
             model = AutoModelForCausalLM.from_config(config)
             n_params = sum(
-                dict((p.data_ptr(), p.numel()) for p in model.parameters()).values()
+                {p.data_ptr(): p.numel() for p in model.parameters()}.values()
             )
             logger.info(
                 f"Training new model from scratch - Total size={n_params/2**20:.2f}M params"
@@ -618,7 +628,7 @@ def main(
             return metric.compute(predictions=preds, references=labels)
 
     # Initialize our Trainer
-    trainer = Trainer(
+    trainer = codebook_trainer.CodebookTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -697,6 +707,13 @@ def main(
             ] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
         else:
             kwargs["dataset"] = data_args.dataset_name
+
+    if training_args.push_to_hub:
+        trainer.push_to_hub(**kwargs)
+    else:
+        trainer.create_model_card(**kwargs)
+
+    return metrics
 
     if training_args.push_to_hub:
         trainer.push_to_hub(**kwargs)

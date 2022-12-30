@@ -6,9 +6,8 @@ import hydra
 import torch
 import transformers
 
+import wandb
 from codebook_features import models, run_clm
-
-# import wandb
 
 
 @hydra.main(config_path="config", config_name="main")
@@ -23,6 +22,13 @@ def main(cfg):
     training_args = transformers.TrainingArguments(**cfg.training_args)
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
+
+    wandb.init(
+        project=cfg.project,
+        name=training_args.run_name,
+        tags=cfg.tags,
+        settings=wandb.Settings(code_dir="."),
+    )
 
     model = transformers.GPT2LMHeadModel.from_pretrained(
         cfg.model_args.model_name_or_path,
