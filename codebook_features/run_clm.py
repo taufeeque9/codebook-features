@@ -37,16 +37,9 @@ import evaluate
 import transformers
 from datasets import load_dataset
 from transformers import (  # HfArgumentParser,; TrainingArguments,
-    CONFIG_MAPPING,
-    MODEL_FOR_CAUSAL_LM_MAPPING,
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    Trainer,
-    default_data_collator,
-    is_torch_tpu_available,
-    set_seed,
-)
+    CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig,
+    AutoModelForCausalLM, AutoTokenizer, Trainer, default_data_collator,
+    is_torch_tpu_available, set_seed)
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
@@ -711,12 +704,3 @@ def main(
         trainer.create_model_card(**kwargs)
 
     return metrics
-
-
-def _mp_fn(index):
-    # For xla_spawn (TPUs)
-    main()
-
-
-if __name__ == "__main__":
-    main()
