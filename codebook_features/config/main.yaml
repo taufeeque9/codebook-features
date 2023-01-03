@@ -1,0 +1,23 @@
+model_args:
+  model_name_or_path: gpt2
+data_args:
+  dataset_name: the_pile
+  streaming: True
+training_args:
+  run_name: train_gpt2_on_pile
+  output_dir: output_main
+  overwrite_output_dir: True
+  do_train: True
+  do_eval: True
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 32
+  max_steps: 10000
+  evaluation_strategy: "steps"
+  eval_steps: 500
+  save_steps: 1000
+
+get_baseline: True
+codebook_size: 100
+layers_to_snap: [-1]
+tags: []
+project: gpt2-codebook

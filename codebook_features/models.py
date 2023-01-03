@@ -2,9 +2,10 @@
 
 import abc
 from collections import Counter
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import torch
+import transformers
 from sklearn.cluster import KMeans
 from torch import nn
 
@@ -367,8 +368,8 @@ class GPT2CodebookModel(CodebookModel):
         self.add_codebooks()
         self.forward = self.model.forward
 
-    # def forward(self, *args, **kwargs):
-    #     return self.model(*args, **kwargs)
+    def forward(self,*args, labels: Optional[torch.LongTensor] = None, **kwargs):
+        return self.model(labels=labels, *args, **kwargs)
 
     def layers(self):
         """Returns the list of transformer layers of the model."""

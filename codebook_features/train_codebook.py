@@ -51,7 +51,7 @@ def main(cfg):
     else:
         baseline_metrics = None
 
-    model = models.GPT2CodebookModel(model, 100, cfg.layers_to_snap)
+    model = models.GPT2CodebookModel(model, cfg.codebook_size, cfg.layers_to_snap)
 
     optimizer = torch.optim.AdamW(
         model.get_codebook_params(),

@@ -1,23 +1,23 @@
 model_args:
   model_name_or_path: gpt2
 data_args:
-  dataset_name: wikitext
-  dataset_config_name: wikitext-2-raw-v1
+  dataset_name: the_pile
+  # dataset_config_name: wikitext-2-raw-v1
   max_train_samples: 2
   max_eval_samples: 2
-  streaming: False
+  streaming: True
 training_args:
   run_name: test
   output_dir: output
   overwrite_output_dir: True
   do_train: True
   do_eval: True
+  
   max_steps: 4
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  prediction_loss_only: True
 
-get_baseline: True
+get_baseline: False
 layers_to_snap: [-4, 3, -2]
 tags: []
 project: gpt2-codebook

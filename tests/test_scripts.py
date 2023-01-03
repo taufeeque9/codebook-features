@@ -1,6 +1,8 @@
 """Tests for scripts."""
 
 import hydra
+import omegaconf
+import pytest
 import torch
 import transformers
 
@@ -18,13 +20,13 @@ class GradientCheckerOptimizer(torch.optim.AdamW):
                 assert p.grad is not None, f"grad is None for: {p}"
         super().step(*args, **kwargs)
 
-
-def test_train_codebook():
+@pytest.mark.parametrize("config_name", ["test", "test_pile"])
+def test_train_codebook(config_name):
     with hydra.initialize_config_module(
         version_base=None, config_module="codebook_features.config"
     ):
         # cfg = compose(config_name="test", overrides=["app.user=test_user"])
-        cfg = hydra.compose(config_name="test")
+        cfg = hydra.compose(config_name=config_name)
         ret = codebook_features.train_codebook.main(cfg)
         assert ret is not None
 
@@ -53,3 +55,16 @@ def test_straight_through_gradient_flows():
         optimizers=(optimizer, None),
     )
     assert metrics is not None
+
+
+def test_model_saving():
+    with hydra.initialize_config_module(
+        version_base=None, config_module="codebook_features.config"
+    ):
+        cfg = hydra.compose(config_name="test")
+        with omegaconf.open_dict(cfg):
+            cfg.get_baseline = False
+            cfg.training_args.save_steps = 1
+            cfg.training_args.max_steps = 4
+        ret = codebook_features.train_codebook.main(cfg)
+        assert ret is not None
