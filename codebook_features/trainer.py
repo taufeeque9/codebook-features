@@ -53,14 +53,15 @@ class CodebookTrainer(transformers.Trainer):
             logs: log dictionary.
         """
         if isinstance(self.model, models.CodebookModel):
-            metric_key_prefix = ''
-            if any('train_' in k for k in logs.keys()):
-                metric_key_prefix = 'train_'
-            elif any('eval_' in k for k in logs.keys()):
-                metric_key_prefix = 'eval_'
-            elif any('test_' in k for k in logs.keys()):
-                metric_key_prefix = 'test_'
-            
+            metric_key_prefix = ""
+            if any("train_" in k for k in logs.keys()):
+                metric_key_prefix = "train_"
+                logs[metric_key_prefix + "learning_rate"] = self._get_learning_rate()
+            elif any("eval_" in k for k in logs.keys()):
+                metric_key_prefix = "eval_"
+            elif any("test_" in k for k in logs.keys()):
+                metric_key_prefix = "test_"
+
             all_codebooks = self.model.all_codebooks
             overall_dead_code_count, dead_code_count, total_codes = 0, 0, 0
             for codebook_idx, codebook in all_codebooks.items():
@@ -68,9 +69,13 @@ class CodebookTrainer(transformers.Trainer):
                 for key in range(codebook.num_codes):
                     if key not in codebook.counts:
                         dead_code_count += 1
-                logs[metric_key_prefix+f"dead_code_fraction_{codebook_idx}"] = dead_code_count / codebook.num_codes
+                logs[metric_key_prefix + f"dead_code_fraction_layer{codebook_idx}"] = (
+                    dead_code_count / codebook.num_codes
+                )
                 overall_dead_code_count += dead_code_count
                 total_codes += codebook.num_codes
-                
-            logs[metric_key_prefix+"dead_code_fraction"] = overall_dead_code_count / total_codes
+
+            logs[metric_key_prefix + "dead_code_fraction"] = (
+                overall_dead_code_count / total_codes
+            )
         super().log(logs)

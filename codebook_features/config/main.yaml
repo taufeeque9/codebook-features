@@ -1,23 +1,28 @@
 model_args:
   model_name_or_path: gpt2
 data_args:
-  dataset_name: the_pile
-  streaming: True
+  dataset_name: wikitext
+  dataset_config_name: wikitext-103-v1
+  streaming: False
 training_args:
-  run_name: train_gpt2_on_pile
+  run_name: train_gpt2_on_wiki
   output_dir: output_main
   overwrite_output_dir: True
   do_train: True
   do_eval: True
-  per_device_train_batch_size: 16
+  logging_first_step: True
+  per_device_train_batch_size: 12
   per_device_eval_batch_size: 32
-  max_steps: 10000
+  warmup_ratio: 0.1
+  learning_rate: 5e-5
+  max_steps: 20000
   evaluation_strategy: "steps"
-  eval_steps: 500
+  eval_steps: 200
   save_steps: 1000
 
-get_baseline: True
-codebook_size: 100
-layers_to_snap: [-1]
+get_baseline: False
+codebook_size: 10000
+layers_to_snap: [0, 5]
+similarity_metric: euclidean
 tags: []
 project: gpt2-codebook

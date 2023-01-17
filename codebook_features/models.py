@@ -2,10 +2,9 @@
 
 import abc
 from collections import Counter
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence
 
 import torch
-import transformers
 from sklearn.cluster import KMeans
 from torch import nn
 
@@ -83,12 +82,33 @@ class KmeansEmbedding(nn.Embedding):
         self.data = None
 
 
-class SnapFunction(torch.autograd.Function):
-    """Autograd Fn to snap input to closest codebook feature."""
+class BaseSnapFunction(torch.autograd.Function):
+    """Autograd Fn to snap input to closest codebook feature.
+    This is the base class. It should be subclassed with a forward function."""
 
     @staticmethod
+    def backward(ctx, grad_outputs, grad_codebook_ids):
+        """Backward pass for the snap function using straight-through operator.
+
+        Args:
+        ----
+            ctx: torch context used for efficiently storing tensors for backward pass.
+            grad_outputs: gradient tensor of the outputs.
+            grad_codebook_ids: gradient tensor of `codebook_ids`.
+
+        Returns: tuple of gradient tensor wrt `inputs` and `codebook` tensors.
+        """
+        codebook, output = ctx.saved_tensors
+        grad_codebook = torch.autograd.grad(output, codebook, grad_outputs)[0]
+        # straight through estimator
+        return grad_outputs, grad_codebook
+
+
+class InnerProductSnapFunction(BaseSnapFunction):
+    @staticmethod
     def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor):
-        """Compute output of the snap function.
+        """Compute output of the snap function with the maximum inner product
+        as the similarity metric.
 
         Replaces each dimension vector of input with features from codebook
         having highest dot-product.
@@ -112,22 +132,34 @@ class SnapFunction(torch.autograd.Function):
         # outputs.grad_fn to be overridden.
         return outputs.detach().clone(), codebook_ids
 
+
+class EuclideanSnapFunction(BaseSnapFunction):
     @staticmethod
-    def backward(ctx, grad_outputs, grad_codebook_ids):
-        """Backward pass for the snap function using straight-through operator.
+    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor):
+        """Compute output of the snap function with the minimum euclidean
+        distance as the similarity metric.
+
+        Replaces each dimension vector of input with features from codebook
+        having highest dot-product.
 
         Args:
         ----
             ctx: torch context used for efficiently storing tensors for backward pass.
-            grad_outputs: gradient tensor of the outputs.
-            grad_codebook_ids: gradient tensor of `codebook_ids`.
+            inputs: input data.
+            codebook: codebook matrix. Shape: (num_features, hidden_dim_size).
 
-        Returns: tuple of gradient tensor wrt `inputs` and `codebook` tensors.
+        Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
-        codebook, output = ctx.saved_tensors
-        grad_codebook = torch.autograd.grad(output, codebook, grad_outputs)[0]
-        # straight through estimator
-        return grad_outputs, grad_codebook
+        logits = torch.cdist(inputs, codebook, p=2)
+        codebook_ids = logits.argmin(-1)
+        # enable gradient so that outputs.grad_fn can be used in backward pass.
+        with torch.enable_grad():
+            outputs = torch.nn.functional.embedding(codebook_ids, codebook)
+        ctx.save_for_backward(codebook, outputs)
+        # detach & clone outputs since the returned tensor's grad_fn will be
+        # overridden by SnapFunction.backward and we don't want the above
+        # outputs.grad_fn to be overridden.
+        return outputs.detach().clone(), codebook_ids
 
 
 class CodebookLayer(nn.Module):
@@ -139,6 +171,7 @@ class CodebookLayer(nn.Module):
         num_codes: int,
         kmeans_init=False,
         soft_snap: bool = False,
+        snap_fn: BaseSnapFunction = EuclideanSnapFunction,
     ):
         """Create the codebook layer.
 
@@ -148,6 +181,8 @@ class CodebookLayer(nn.Module):
             num_codes: number of codebook features to have.
             kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
             soft_snap: whether to snap the input using softmax. Defaults to False.
+            snap_fn: snap function to use.
+                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
         """
         super().__init__()
         if kmeans_init:
@@ -157,6 +192,7 @@ class CodebookLayer(nn.Module):
         self.num_codes = num_codes
         self.counts = Counter()
         self.soft_snap = soft_snap
+        self.snap_fn = snap_fn
 
     def forward(self, x):
         """Snaps activations to elements in the codebook.
@@ -171,7 +207,7 @@ class CodebookLayer(nn.Module):
         assert len(x.shape) == 3
         if not self.soft_snap:
             # Hard choice of a single codebook vector
-            output, codebook_ids = SnapFunction.apply(x, self.codebook.weight)
+            output, codebook_ids = self.snap_fn.apply(x, self.codebook.weight)
             self.counts.update(codebook_ids.cpu().numpy().flat)
         else:
             # NOTE: was previously doing a gumbel softmax,
@@ -217,7 +253,13 @@ class CodebookLayer(nn.Module):
 class TransformerLayerWrapper(nn.Module):
     """Wraps a transformer layer module by applying codebooks on the output of the layer."""
 
-    def __init__(self, transformer_layer: nn.Module, dim: int, num_codes: int):
+    def __init__(
+        self,
+        transformer_layer: nn.Module,
+        dim: int,
+        num_codes: int,
+        snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+    ):
         """Create the transformer layer wrapped with the codebook.
 
         Args:
@@ -225,10 +267,12 @@ class TransformerLayerWrapper(nn.Module):
             transformer_layer (_type_): _description_
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
+            snap_fn: snap function to use.
+                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
         """
         super().__init__()
         self.transformer_layer = transformer_layer
-        self.codebook_layer = CodebookLayer(dim, num_codes)
+        self.codebook_layer = CodebookLayer(dim, num_codes, snap_fn=snap_fn)
         self.snap = True
 
     def forward(self, *args, **kwargs):
@@ -253,6 +297,7 @@ class CodebookModel(nn.Module, abc.ABC):
         model: nn.Module,
         num_codes: int,
         layers_to_snap: Sequence = (),
+        similarity_metric: str = "euclidean",
     ) -> None:
         """Build the codebook based model.
 
@@ -262,6 +307,7 @@ class CodebookModel(nn.Module, abc.ABC):
             num_codes: number of codebook features to have.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
                 Defaults to []. Can contain negative numbers to index from the last layers.
+            similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
         """
         super().__init__()
         self.model = model
@@ -274,17 +320,29 @@ class CodebookModel(nn.Module, abc.ABC):
                 self.layers_to_snap[i] += self.num_layers()
         self.layers_to_snap = sorted(self.layers_to_snap)
         self.codebook_params = []
+        self.model_params = []
         self.all_codebooks = {}
+        self.freeze_model_params()
+        if similarity_metric == "euclidean":
+            self.snap_fn = EuclideanSnapFunction
+        elif similarity_metric == "inner_product":
+            self.snap_fn = InnerProductSnapFunction
+        else:
+            raise ValueError(
+                "`similarity_metric` should be either 'euclidean' or 'inner_product'."
+            )
 
     def add_codebooks(self):
         """Adds codebooks for the layers that are to be snapped."""
         layers = self.layers()
         for i in range(len(layers)):
+            self.model_params.append(list(layers[i].parameters()))
             if i in self.layers_to_snap:
                 layers[i] = TransformerLayerWrapper(
                     layers[i],
                     dim=self.model.config.hidden_size,
                     num_codes=self.num_codes,
+                    snap_fn=self.snap_fn,
                 )
                 self.codebook_params += list(
                     layers[i].codebook_layer.codebook.parameters(),
@@ -303,9 +361,20 @@ class CodebookModel(nn.Module, abc.ABC):
             if i in self.layers_to_snap:
                 layer.snap = False
 
+    def freeze_model_params(self):
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+    def unfreeze_model_params(self):
+        for param in self.model.parameters():
+            param.requires_grad = True
+
     def get_codebook_params(self):
         """Gets codebook parameters."""
         return self.codebook_params
+
+    def get_model_params(self):
+        return self.model_params
 
     def get_input_embeddings(self):
         """Gets input embeddings of the model."""
@@ -325,7 +394,9 @@ class CodebookModel(nn.Module, abc.ABC):
 class BertCodebookModel(CodebookModel):
     """Codebook model for Bert-based models."""
 
-    def __init__(self, model, num_codes, layers_to_snap=()):
+    def __init__(
+        self, model, num_codes, layers_to_snap=(), similarity_metric="euclidean"
+    ):
         """Build the codebook based model.
 
         Args:
@@ -334,8 +405,9 @@ class BertCodebookModel(CodebookModel):
             num_codes: number of codebook features to have.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
                 Defaults to []. Can contain negative numbers to index from the last layers.
+            similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
         """
-        super().__init__(model, num_codes, layers_to_snap)
+        super().__init__(model, num_codes, layers_to_snap, similarity_metric)
         self.add_codebooks()
         self.forward = self.model.forward
 
@@ -354,7 +426,9 @@ class BertCodebookModel(CodebookModel):
 class GPT2CodebookModel(CodebookModel):
     """Codebook model for GPT2."""
 
-    def __init__(self, model, num_codes, layers_to_snap=()):
+    def __init__(
+        self, model, num_codes, layers_to_snap=(), similarity_metric="euclidean"
+    ):
         """Build the codebook based model.
 
         Args:
@@ -363,13 +437,16 @@ class GPT2CodebookModel(CodebookModel):
             num_codes: number of codebook features to have.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
                 Defaults to []. Can contain negative numbers to index from the last layers.
+            similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
         """
-        super().__init__(model, num_codes, layers_to_snap)
+        super().__init__(model, num_codes, layers_to_snap, similarity_metric)
         self.add_codebooks()
         self.forward = self.model.forward
 
-    def forward(self,*args, labels: Optional[torch.LongTensor] = None, **kwargs):
-        return self.model(labels=labels, *args, **kwargs)
+    def forward(self, *args, labels: Optional[torch.LongTensor] = None, **kwargs):
+        raise RuntimeError(
+            "This shouldn't get executed as forward is overridden in init."
+        )
 
     def layers(self):
         """Returns the list of transformer layers of the model."""

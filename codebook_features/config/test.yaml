@@ -15,9 +15,12 @@ training_args:
   max_steps: 4
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  prediction_loss_only: True
+  report_to: none
 
-get_baseline: True
-layers_to_snap: [-4, 3, -2]
+get_baseline: False
+codebook_size: 100
+layers_to_snap: [-1, -5]
+similarity_metric: euclidean
+train_model_params: True
 tags: []
 project: gpt2-codebook

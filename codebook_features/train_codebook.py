@@ -1,8 +1,10 @@
 """Train script for Codebook models."""
 
 import dataclasses
+import json
 
 import hydra
+import omegaconf
 import torch
 import transformers
 
@@ -28,19 +30,20 @@ def main(cfg):
         name=training_args.run_name,
         tags=cfg.tags,
         settings=wandb.Settings(code_dir="."),
+        config=omegaconf.OmegaConf.to_container(cfg, resolve=True),
     )
 
     model = transformers.GPT2LMHeadModel.from_pretrained(
         cfg.model_args.model_name_or_path,
     )
-
+    baseline_output_dir = training_args.output_dir + "_baseline"
     if cfg.get_baseline:
-        eval_output_dir = training_args.output_dir + "_baseline"
         eval_args = dataclasses.replace(
             training_args,
-            output_dir=eval_output_dir,
+            output_dir=baseline_output_dir,
             do_train=False,
             do_eval=True,
+            report_to="none",
         )
         baseline_metrics = run_clm.main(
             model_args,
@@ -48,16 +51,38 @@ def main(cfg):
             training_args=eval_args,
             model=model,
         )
+        baseline_metrics = {"baseline/" + k: v for k, v in baseline_metrics.items()}
+        with open(baseline_output_dir + "/metrics.json", "w") as f:
+            json.dump(baseline_metrics, f)
     else:
-        baseline_metrics = None
+        try:
+            with open(baseline_output_dir + "/metrics.json", "r") as f:
+                baseline_metrics = json.load(f)
+        except FileNotFoundError:
+            baseline_metrics = {}
 
-    model = models.GPT2CodebookModel(model, cfg.codebook_size, cfg.layers_to_snap)
-
-    optimizer = torch.optim.AdamW(
-        model.get_codebook_params(),
-        training_args.learning_rate,
-        weight_decay=training_args.weight_decay,
+    wandb.log(baseline_metrics, commit=False)
+    model = models.GPT2CodebookModel(
+        model,
+        cfg.codebook_size,
+        cfg.layers_to_snap,
+        similarity_metric=cfg.similarity_metric,
     )
+    if cfg.train_model_params:
+        model.unfreeze_model_params()
+        params = list(model.parameters())
+    else:
+        model.freeze_model_params()
+        params = model.get_codebook_params()
+    if len(params) > 0:
+        optimizer = torch.optim.AdamW(
+            params,
+            training_args.learning_rate,
+            weight_decay=training_args.weight_decay,
+        )
+    else:
+        RuntimeWarning("Codebook not found in model. Training with model params.")
+        optimizer = None
 
     metrics = run_clm.main(
         model_args,
