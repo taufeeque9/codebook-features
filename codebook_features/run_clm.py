@@ -667,7 +667,7 @@ def main(
         trainer.save_state()
 
     # Evaluation
-    if training_args.do_eval:
+    if training_args.do_eval and not training_args.do_train:
         logger.info("*** Evaluate ***")
 
         metrics = trainer.evaluate()

@@ -24,5 +24,5 @@ get_baseline: False
 codebook_size: 10000
 layers_to_snap: [0, 5]
 similarity_metric: euclidean
-tags: []
+tag_keys: []
 project: gpt2-codebook

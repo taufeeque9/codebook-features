@@ -5,6 +5,7 @@ import json
 
 import hydra
 import omegaconf
+import pandas as pd
 import torch
 import transformers
 
@@ -25,12 +26,19 @@ def main(cfg):
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
 
+    cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
+    flat_cfg_dict = pd.json_normalize(cfg_dict, sep="@").to_dict(orient="records")[0]
+    flat_cfg_dict = {k.split("@")[-1]: v for k, v in flat_cfg_dict.items()}
+
+    tags = [training_args.run_name]
+    for key in cfg.tag_keys:
+        tags.append(f"{key}={flat_cfg_dict[key]}")
     wandb.init(
         project=cfg.project,
         name=training_args.run_name,
-        tags=cfg.tags,
+        tags=tags,
         settings=wandb.Settings(code_dir="."),
-        config=omegaconf.OmegaConf.to_container(cfg, resolve=True),
+        config=cfg_dict,
     )
 
     model = transformers.GPT2LMHeadModel.from_pretrained(
