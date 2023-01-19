@@ -75,6 +75,7 @@ def main(cfg):
         cfg.codebook_size,
         cfg.layers_to_snap,
         similarity_metric=cfg.similarity_metric,
+        codebook_at=cfg.codebook_at,
     )
     if cfg.train_model_params:
         model.unfreeze_model_params()

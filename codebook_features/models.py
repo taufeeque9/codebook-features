@@ -250,12 +250,12 @@ class CodebookLayer(nn.Module):
                 pass
 
 
-class TransformerLayerWrapper(nn.Module):
-    """Wraps a transformer layer module by applying codebooks on the output of the layer."""
+class CodebookWrapper(nn.Module, abc.ABC):
+    """Wraps a nn module by applying codebooks on the output of the layer."""
 
     def __init__(
         self,
-        transformer_layer: nn.Module,
+        module_layer: nn.Module,
         dim: int,
         num_codes: int,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
@@ -271,9 +271,38 @@ class TransformerLayerWrapper(nn.Module):
                 Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
         """
         super().__init__()
-        self.transformer_layer = transformer_layer
+        self.module_layer = module_layer
         self.codebook_layer = CodebookLayer(dim, num_codes, snap_fn=snap_fn)
         self.snap = True
+
+    @abc.abstractmethod
+    def forward(self, *args, **kwargs):
+        pass
+
+
+class TransformerLayerWrapper(CodebookWrapper):
+    """Wraps a transformer layer module by applying codebooks on the output of the layer."""
+
+    def __init__(
+        self,
+        module_layer: nn.Module,
+        dim: int,
+        num_codes: int,
+        snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+    ):
+        """Create the transformer layer wrapped with the codebook.
+
+        Args:
+        ----
+            module_layer (_type_): _description_
+            dim: dimension size of the codebook features.
+            num_codes: number of codebook features to have.
+            snap_fn: snap function to use.
+                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+        """
+        super().__init__(
+            module_layer=module_layer, dim=dim, num_codes=num_codes, snap_fn=snap_fn
+        )
 
     def forward(self, *args, **kwargs):
         """Forward function for the wrapped layer.
@@ -281,10 +310,47 @@ class TransformerLayerWrapper(nn.Module):
         Returns: output using codebook features if `snap` is enabled otherwise
             returns the output of the transformer layer.
         """
-        layer_outputs = self.transformer_layer(*args, **kwargs)
+        layer_outputs = self.module_layer(*args, **kwargs)
         if self.snap:
             snapped_output = self.codebook_layer(layer_outputs[0])
             layer_outputs = (snapped_output, *layer_outputs[1:])
+
+        return layer_outputs
+
+
+class MLPWrapper(CodebookWrapper):
+    """Wraps a MLP layer module by applying codebooks on the output of the layer."""
+
+    def __init__(
+        self,
+        module_layer: nn.Module,
+        dim: int,
+        num_codes: int,
+        snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+    ):
+        """Create the transformer layer wrapped with the codebook.
+
+        Args:
+        ----
+            module_layer:
+            dim: dimension size of the codebook features.
+            num_codes: number of codebook features to have.
+            snap_fn: snap function to use.
+                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+        """
+        super().__init__(
+            module_layer=module_layer, dim=dim, num_codes=num_codes, snap_fn=snap_fn
+        )
+
+    def forward(self, *args, **kwargs):
+        """Forward function for the wrapped layer.
+
+        Returns: output using codebook features if `snap` is enabled otherwise
+            returns the output of the transformer layer.
+        """
+        layer_outputs = self.module_layer(*args, **kwargs)
+        if self.snap:
+            layer_outputs = self.codebook_layer(layer_outputs)
 
         return layer_outputs
 
@@ -298,6 +364,7 @@ class CodebookModel(nn.Module, abc.ABC):
         num_codes: int,
         layers_to_snap: Sequence = (),
         similarity_metric: str = "euclidean",
+        codebook_at: str = "mlp",
     ) -> None:
         """Build the codebook based model.
 
@@ -331,6 +398,14 @@ class CodebookModel(nn.Module, abc.ABC):
             raise ValueError(
                 "`similarity_metric` should be either 'euclidean' or 'inner_product'."
             )
+        if codebook_at == "mlp":
+            self.codebook_wrapper = MLPWrapper
+        elif codebook_at == "transformer_block":
+            self.codebook_wrapper = TransformerLayerWrapper
+        else:
+            raise ValueError(
+                "`codebook_at` should be either 'mlp' or 'transformer_block'."
+            )
 
     def add_codebooks(self):
         """Adds codebooks for the layers that are to be snapped."""
@@ -338,26 +413,38 @@ class CodebookModel(nn.Module, abc.ABC):
         for i in range(len(layers)):
             self.model_params.append(list(layers[i].parameters()))
             if i in self.layers_to_snap:
-                layers[i] = TransformerLayerWrapper(
-                    layers[i],
-                    dim=self.model.config.hidden_size,
-                    num_codes=self.num_codes,
-                    snap_fn=self.snap_fn,
-                )
-                self.codebook_params += list(
-                    layers[i].codebook_layer.codebook.parameters(),
-                )
-                self.all_codebooks[i] = layers[i].codebook_layer
+                if self.codebook_wrapper is TransformerLayerWrapper:
+                    layers[i] = self.codebook_wrapper(
+                        layers[i],
+                        dim=self.model.config.hidden_size,
+                        num_codes=self.num_codes,
+                        snap_fn=self.snap_fn,
+                    )
+                    self.codebook_params += list(
+                        layers[i].codebook_layer.codebook.parameters(),
+                    )
+                    self.all_codebooks[i] = layers[i].codebook_layer
+                else:
+                    layers[i].mlp = self.codebook_wrapper(
+                        layers[i].mlp,
+                        dim=self.model.config.hidden_size,
+                        num_codes=self.num_codes,
+                        snap_fn=self.snap_fn,
+                    )
+                    self.codebook_params += list(
+                        layers[i].mlp.codebook_layer.codebook.parameters(),
+                    )
+                    self.all_codebooks[i] = layers[i].mlp.codebook_layer
 
     def enable_codebooks(self):
         """Enable the use of codebooks in all the layers to snap."""
-        for i, layer in enumerate(self.layers()):
+        for i, layer in enumerate(self.all_codebooks):
             if i in self.layers_to_snap:
                 layer.snap = True
 
     def disable_codebooks(self):
         """Disable the use of codebooks in all the layers."""
-        for i, layer in enumerate(self.layers()):
+        for i, layer in enumerate(self.all_codebooks):
             if i in self.layers_to_snap:
                 layer.snap = False
 
@@ -395,7 +482,7 @@ class BertCodebookModel(CodebookModel):
     """Codebook model for Bert-based models."""
 
     def __init__(
-        self, model, num_codes, layers_to_snap=(), similarity_metric="euclidean"
+        self, model, num_codes, layers_to_snap=(), similarity_metric="euclidean", codebook_at: str = "mlp",
     ):
         """Build the codebook based model.
 
@@ -407,7 +494,7 @@ class BertCodebookModel(CodebookModel):
                 Defaults to []. Can contain negative numbers to index from the last layers.
             similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
         """
-        super().__init__(model, num_codes, layers_to_snap, similarity_metric)
+        super().__init__(model, num_codes, layers_to_snap, similarity_metric, codebook_at)
         self.add_codebooks()
         self.forward = self.model.forward
 
@@ -427,7 +514,7 @@ class GPT2CodebookModel(CodebookModel):
     """Codebook model for GPT2."""
 
     def __init__(
-        self, model, num_codes, layers_to_snap=(), similarity_metric="euclidean"
+        self, model, num_codes, layers_to_snap=(), similarity_metric="euclidean", codebook_at: str = "mlp",
     ):
         """Build the codebook based model.
 
@@ -439,7 +526,7 @@ class GPT2CodebookModel(CodebookModel):
                 Defaults to []. Can contain negative numbers to index from the last layers.
             similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
         """
-        super().__init__(model, num_codes, layers_to_snap, similarity_metric)
+        super().__init__(model, num_codes, layers_to_snap, similarity_metric, codebook_at)
         self.add_codebooks()
         self.forward = self.model.forward
 

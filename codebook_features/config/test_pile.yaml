@@ -20,6 +20,7 @@ get_baseline: False
 codebook_size: 100
 layers_to_snap: [-1, -5]
 similarity_metric: euclidean
+codebook_at: mlp
 train_model_params: True
 tag_keys: []
 project: gpt2-codebook

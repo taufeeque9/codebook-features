@@ -16,7 +16,7 @@ training_args:
   warmup_ratio: 0.1
   learning_rate: 5e-5
   max_steps: 20000
-  evaluation_strategy: "steps"
+  evaluation_strategy: steps
   eval_steps: 200
   save_steps: 10000
 
@@ -24,5 +24,7 @@ get_baseline: False
 codebook_size: 10000
 layers_to_snap: [0, 5]
 similarity_metric: euclidean
+codebook_at: mlp
+train_model_params: True
 tag_keys: []
 project: gpt2-codebook

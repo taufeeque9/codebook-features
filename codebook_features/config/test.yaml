@@ -12,7 +12,7 @@ training_args:
   overwrite_output_dir: True
   do_train: True
   do_eval: True
-  max_steps: 4
+  max_steps: 2
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
   report_to: none
@@ -21,6 +21,7 @@ get_baseline: False
 codebook_size: 100
 layers_to_snap: [-1, -5]
 similarity_metric: euclidean
+codebook_at: mlp
 train_model_params: True
 tag_keys: []
 project: gpt2-codebook
