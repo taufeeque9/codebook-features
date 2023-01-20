@@ -2,9 +2,10 @@
 
 import abc
 from collections import Counter
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple, Union
 
 import torch
+import transformers
 from sklearn.cluster import KMeans
 from torch import nn
 
@@ -355,6 +356,82 @@ class MLPWrapper(CodebookWrapper):
         return layer_outputs
 
 
+class PreResidualCodebookGPT2Block(transformers.models.gpt2.modeling_gpt2.GPT2Block):
+    def __init__(self, config, layer_idx=None, codebook_layer=None):
+        super().__init__(config, layer_idx)
+        self.codebook_layer = codebook_layer
+        self.snap = True
+
+    def forward(
+        self,
+        hidden_states: Optional[Tuple[torch.FloatTensor]],
+        layer_past: Optional[Tuple[torch.Tensor]] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        encoder_attention_mask: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
+    ) -> Union[
+        Tuple[torch.Tensor],
+        Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]],
+    ]:
+        residual = hidden_states
+        hidden_states = self.ln_1(hidden_states)
+        attn_outputs = self.attn(
+            hidden_states,
+            layer_past=layer_past,
+            attention_mask=attention_mask,
+            head_mask=head_mask,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+        )
+        attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
+        outputs = attn_outputs[1:]
+        # residual connection
+        hidden_states = attn_output + residual
+
+        if encoder_hidden_states is not None:
+            # add one self-attention block for cross-attention
+            if not hasattr(self, "crossattention"):
+                raise ValueError(
+                    f"If `encoder_hidden_states` are passed, {self} has to be instantiated with "
+                    "cross-attention layers by setting `config.add_cross_attention=True`"
+                )
+            residual = hidden_states
+            hidden_states = self.ln_cross_attn(hidden_states)
+            cross_attn_outputs = self.crossattention(
+                hidden_states,
+                attention_mask=attention_mask,
+                head_mask=head_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                output_attentions=output_attentions,
+            )
+            attn_output = cross_attn_outputs[0]
+            # residual connection
+            hidden_states = residual + attn_output
+            outputs = (
+                outputs + cross_attn_outputs[2:]
+            )  # add cross attentions if we output attention weights
+
+        # residual = hidden_states
+        hidden_states = self.ln_2(hidden_states)
+        feed_forward_hidden_states = self.mlp(hidden_states)
+        # residual connection
+        main_stream = feed_forward_hidden_states + attn_output
+        if self.codebook_layer and self.snap:
+            main_stream = self.codebook_layer(main_stream)
+        hidden_states = residual + main_stream
+
+        if use_cache:
+            outputs = (hidden_states,) + outputs
+        else:
+            outputs = (hidden_states,) + outputs[1:]
+
+        return outputs  # hidden_states, present, (attentions, cross_attentions)
+
+
 class CodebookModel(nn.Module, abc.ABC):
     """ABC for a model containing codebook features."""
 
@@ -402,6 +479,8 @@ class CodebookModel(nn.Module, abc.ABC):
             self.codebook_wrapper = MLPWrapper
         elif codebook_at == "transformer_block":
             self.codebook_wrapper = TransformerLayerWrapper
+        elif codebook_at == "mlp_and_attention":
+            self.codebook_wrapper = PreResidualCodebookGPT2Block
         else:
             raise ValueError(
                 "`codebook_at` should be either 'mlp' or 'transformer_block'."
@@ -424,7 +503,7 @@ class CodebookModel(nn.Module, abc.ABC):
                         layers[i].codebook_layer.codebook.parameters(),
                     )
                     self.all_codebooks[i] = layers[i].codebook_layer
-                else:
+                elif self.codebook_wrapper is MLPWrapper:
                     layers[i].mlp = self.codebook_wrapper(
                         layers[i].mlp,
                         dim=self.model.config.hidden_size,
@@ -435,6 +514,20 @@ class CodebookModel(nn.Module, abc.ABC):
                         layers[i].mlp.codebook_layer.codebook.parameters(),
                     )
                     self.all_codebooks[i] = layers[i].mlp.codebook_layer
+                else:
+                    self.all_codebooks[i] = CodebookLayer(
+                        dim=self.model.config.hidden_size,
+                        num_codes=self.num_codes,
+                        snap_fn=self.snap_fn,
+                    )
+                    self.codebook_params += list(
+                        self.all_codebooks[i].codebook.parameters(),
+                    )
+                    layers[i] = self.codebook_wrapper(
+                        self.model.config,
+                        i,
+                        self.all_codebooks[i],
+                    )
 
     def enable_codebooks(self):
         """Enable the use of codebooks in all the layers to snap."""
@@ -482,7 +575,12 @@ class BertCodebookModel(CodebookModel):
     """Codebook model for Bert-based models."""
 
     def __init__(
-        self, model, num_codes, layers_to_snap=(), similarity_metric="euclidean", codebook_at: str = "mlp",
+        self,
+        model,
+        num_codes,
+        layers_to_snap=(),
+        similarity_metric="euclidean",
+        codebook_at: str = "mlp",
     ):
         """Build the codebook based model.
 
@@ -494,7 +592,9 @@ class BertCodebookModel(CodebookModel):
                 Defaults to []. Can contain negative numbers to index from the last layers.
             similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
         """
-        super().__init__(model, num_codes, layers_to_snap, similarity_metric, codebook_at)
+        super().__init__(
+            model, num_codes, layers_to_snap, similarity_metric, codebook_at
+        )
         self.add_codebooks()
         self.forward = self.model.forward
 
@@ -514,7 +614,12 @@ class GPT2CodebookModel(CodebookModel):
     """Codebook model for GPT2."""
 
     def __init__(
-        self, model, num_codes, layers_to_snap=(), similarity_metric="euclidean", codebook_at: str = "mlp",
+        self,
+        model,
+        num_codes,
+        layers_to_snap=(),
+        similarity_metric="euclidean",
+        codebook_at: str = "mlp",
     ):
         """Build the codebook based model.
 
@@ -526,7 +631,9 @@ class GPT2CodebookModel(CodebookModel):
                 Defaults to []. Can contain negative numbers to index from the last layers.
             similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
         """
-        super().__init__(model, num_codes, layers_to_snap, similarity_metric, codebook_at)
+        super().__init__(
+            model, num_codes, layers_to_snap, similarity_metric, codebook_at
+        )
         self.add_codebooks()
         self.forward = self.model.forward
 
