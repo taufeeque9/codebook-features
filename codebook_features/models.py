@@ -2,7 +2,7 @@
 
 import abc
 from collections import Counter
-from typing import Optional, Sequence, Tuple, Union
+from typing import Any, Optional, Sequence, Tuple, Union
 
 import torch
 import transformers
@@ -456,12 +456,15 @@ class CodebookModel(nn.Module, abc.ABC):
         super().__init__()
         self.model = model
         self.num_codes = num_codes
-        self.layers_to_snap = list(layers_to_snap)
         num_layers = self.num_layers()
-        for i in range(len(self.layers_to_snap)):
-            assert -num_layers <= i and i < num_layers
-            if self.layers_to_snap[i] < 0:
-                self.layers_to_snap[i] += self.num_layers()
+        if type(layers_to_snap) is str and layers_to_snap == "all":
+            self.layers_to_snap = list(range(num_layers))
+        else:
+            self.layers_to_snap = list(layers_to_snap)
+            for i in range(len(self.layers_to_snap)):
+                assert -num_layers <= i and i < num_layers
+                if self.layers_to_snap[i] < 0:
+                    self.layers_to_snap[i] += num_layers
         self.layers_to_snap = sorted(self.layers_to_snap)
         self.codebook_params = []
         self.model_params = []
@@ -475,16 +478,11 @@ class CodebookModel(nn.Module, abc.ABC):
             raise ValueError(
                 "`similarity_metric` should be either 'euclidean' or 'inner_product'."
             )
-        if codebook_at == "mlp":
-            self.codebook_wrapper = MLPWrapper
-        elif codebook_at == "transformer_block":
-            self.codebook_wrapper = TransformerLayerWrapper
-        elif codebook_at == "mlp_and_attention":
-            self.codebook_wrapper = PreResidualCodebookGPT2Block
-        else:
-            raise ValueError(
-                "`codebook_at` should be either 'mlp' or 'transformer_block'."
-            )
+        self.codebook_at = codebook_at.split(",")
+
+    @property
+    def device(self):
+        return self.model.device
 
     def add_codebooks(self):
         """Adds codebooks for the layers that are to be snapped."""
@@ -492,8 +490,8 @@ class CodebookModel(nn.Module, abc.ABC):
         for i in range(len(layers)):
             self.model_params.append(list(layers[i].parameters()))
             if i in self.layers_to_snap:
-                if self.codebook_wrapper is TransformerLayerWrapper:
-                    layers[i] = self.codebook_wrapper(
+                if self.codebook_at == "transformer_block":
+                    layers[i] = TransformerLayerWrapper(
                         layers[i],
                         dim=self.model.config.hidden_size,
                         num_codes=self.num_codes,
@@ -503,8 +501,8 @@ class CodebookModel(nn.Module, abc.ABC):
                         layers[i].codebook_layer.codebook.parameters(),
                     )
                     self.all_codebooks[i] = layers[i].codebook_layer
-                elif self.codebook_wrapper is MLPWrapper:
-                    layers[i].mlp = self.codebook_wrapper(
+                if "mlp" in self.codebook_at:
+                    layers[i].mlp = MLPWrapper(
                         layers[i].mlp,
                         dim=self.model.config.hidden_size,
                         num_codes=self.num_codes,
@@ -514,7 +512,18 @@ class CodebookModel(nn.Module, abc.ABC):
                         layers[i].mlp.codebook_layer.codebook.parameters(),
                     )
                     self.all_codebooks[i] = layers[i].mlp.codebook_layer
-                else:
+                if "attention" in self.codebook_at:
+                    layers[i].attn = TransformerLayerWrapper(
+                        layers[i].attn,
+                        dim=self.model.config.hidden_size,
+                        num_codes=self.num_codes,
+                        snap_fn=self.snap_fn,
+                    )
+                    self.codebook_params += list(
+                        layers[i].attn.codebook_layer.codebook.parameters(),
+                    )
+                    self.all_codebooks[i] = layers[i].attn.codebook_layer
+                if "attention_and_mlp" in self.codebook_at:
                     self.all_codebooks[i] = CodebookLayer(
                         dim=self.model.config.hidden_size,
                         num_codes=self.num_codes,
@@ -523,7 +532,7 @@ class CodebookModel(nn.Module, abc.ABC):
                     self.codebook_params += list(
                         self.all_codebooks[i].codebook.parameters(),
                     )
-                    layers[i] = self.codebook_wrapper(
+                    layers[i] = PreResidualCodebookGPT2Block(
                         self.model.config,
                         i,
                         self.all_codebooks[i],
@@ -636,6 +645,11 @@ class GPT2CodebookModel(CodebookModel):
         )
         self.add_codebooks()
         self.forward = self.model.forward
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "model":
+            self.forward = self.model.forward
 
     def forward(self, *args, labels: Optional[torch.LongTensor] = None, **kwargs):
         raise RuntimeError(

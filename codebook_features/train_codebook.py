@@ -23,6 +23,10 @@ def main(cfg):
     Returns: tuple of metrics for trained model and the baseline metrics.
     """
     training_args = transformers.TrainingArguments(**cfg.training_args)
+    # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
+    if torch.cuda.get_device_properties(0).total_memory / (2**30) > 70:
+        training_args.per_device_train_batch_size *= 2
+    training_args.per_device_train_batch_size = cfg.batch_size
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
 
