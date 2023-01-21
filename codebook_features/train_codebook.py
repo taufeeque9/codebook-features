@@ -23,14 +23,20 @@ def main(cfg):
     Returns: tuple of metrics for trained model and the baseline metrics.
     """
     training_args = transformers.TrainingArguments(**cfg.training_args)
-    # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
-    if torch.cuda.get_device_properties(0).total_memory / (2**30) > 70:
-        training_args.per_device_train_batch_size *= 2
-    training_args.per_device_train_batch_size = cfg.batch_size
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
 
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
+    # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
+    if torch.cuda.get_device_properties(0).total_memory / (2**30) > 70:
+        training_args.per_device_train_batch_size *= 2
+    elif torch.cuda.get_device_properties(0).total_memory / (2**30) > 40:
+        training_args.per_device_train_batch_size *= (
+            int(training_args.per_device_train_batch_size * 1.25) + 1
+        )
+    cfg_dict["training_args"][
+        "per_device_train_batch_size"
+    ] = training_args.per_device_train_batch_size
     flat_cfg_dict = pd.json_normalize(cfg_dict, sep="@").to_dict(orient="records")[0]
     flat_cfg_dict = {k.split("@")[-1]: v for k, v in flat_cfg_dict.items()}
 
