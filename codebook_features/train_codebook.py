@@ -31,7 +31,7 @@ def main(cfg):
     if torch.cuda.get_device_properties(0).total_memory / (2**30) > 70:
         training_args.per_device_train_batch_size *= 2
     elif torch.cuda.get_device_properties(0).total_memory / (2**30) > 40:
-        training_args.per_device_train_batch_size *= (
+        training_args.per_device_train_batch_size = (
             int(training_args.per_device_train_batch_size * 1.25) + 1
         )
     cfg_dict["training_args"][
