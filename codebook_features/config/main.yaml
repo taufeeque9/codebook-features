@@ -28,5 +28,6 @@ layers_to_snap: [0, 5]
 similarity_metric: euclidean
 codebook_at: mlp
 train_model_params: True
+model_lr_factor: 0.1
 tag_keys: []
 project: gpt2-codebook

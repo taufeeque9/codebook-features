@@ -90,7 +90,9 @@ def main(cfg):
     )
     if cfg.train_model_params:
         model.unfreeze_model_params()
-        params = list(model.parameters())
+        # params = list(model.parameters())
+        params = [{"params": model.get_codebook_params(), "lr": training_args.learning_rate},
+                  {"params": model.get_model_params(), "lr": cfg.model_lr_factor*training_args.learning_rate}]
     else:
         model.freeze_model_params()
         params = model.get_codebook_params()

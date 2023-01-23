@@ -562,19 +562,26 @@ class CodebookModel(nn.Module, abc.ABC):
         return self.codebook_params
 
     def get_model_params(self):
+        """Gets model's original parameters (not including codebook params)."""
         return self.model_params
 
     def freeze_model_params(self):
+        """Freezes model's actual parameters."""
         for param in self.get_model_params():
             param.requires_grad = False
 
     def unfreeze_model_params(self):
+        """Unfreezes model's actual parameters."""
         for param in self.get_model_params():
             param.requires_grad = True
 
     def get_input_embeddings(self):
         """Gets input embeddings of the model."""
         return self.model.get_input_embeddings()
+
+    def resize_token_embeddings(self, new_num_tokens):
+        """Resizes token embeddings of the model."""
+        return self.model.resize_token_embeddings(new_num_tokens)
 
     @abc.abstractmethod
     def layers(self):
