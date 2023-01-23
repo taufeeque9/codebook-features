@@ -28,15 +28,16 @@ def main(cfg):
 
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
     # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
-    if torch.cuda.get_device_properties(0).total_memory / (2**30) > 70:
-        training_args.per_device_train_batch_size *= 2
-    elif torch.cuda.get_device_properties(0).total_memory / (2**30) > 40:
-        training_args.per_device_train_batch_size = (
-            int(training_args.per_device_train_batch_size * 1.25) + 1
-        )
-    cfg_dict["training_args"][
-        "per_device_train_batch_size"
-    ] = training_args.per_device_train_batch_size
+    if torch.cuda.is_available():
+        if torch.cuda.get_device_properties(0).total_memory / (2**30) > 70:
+            training_args.per_device_train_batch_size *= 2
+        elif torch.cuda.get_device_properties(0).total_memory / (2**30) > 40:
+            training_args.per_device_train_batch_size = (
+                int(training_args.per_device_train_batch_size * 1.25) + 1
+            )
+        cfg_dict["training_args"][
+            "per_device_train_batch_size"
+        ] = training_args.per_device_train_batch_size
     flat_cfg_dict = pd.json_normalize(cfg_dict, sep="@").to_dict(orient="records")[0]
     flat_cfg_dict = {k.split("@")[-1]: v for k, v in flat_cfg_dict.items()}
 

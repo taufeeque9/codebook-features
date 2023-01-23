@@ -489,7 +489,7 @@ class CodebookModel(nn.Module, abc.ABC):
         """Adds codebooks for the layers that are to be snapped."""
         layers = self.layers()
         for i in range(len(layers)):
-            self.model_params.append(list(layers[i].parameters()))
+            self.model_params += list(layers[i].parameters())
             if i in self.layers_to_snap:
                 codebooks_in_layer = []
                 if self.codebook_at == "transformer_block":
