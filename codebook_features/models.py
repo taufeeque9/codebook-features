@@ -358,6 +358,7 @@ class MLPWrapper(CodebookWrapper):
 
 class PreResidualCodebookGPT2Block(transformers.models.gpt2.modeling_gpt2.GPT2Block):
     def __init__(self, config, layer_idx=None, codebook_layer=None):
+        assert not config.add_cross_attention, "Not implemented"
         super().__init__(config, layer_idx)
         self.codebook_layer = codebook_layer
         self.snap = True
@@ -478,7 +479,7 @@ class CodebookModel(nn.Module, abc.ABC):
             raise ValueError(
                 "`similarity_metric` should be either 'euclidean' or 'inner_product'."
             )
-        self.codebook_at = codebook_at.split(",")
+        self.codebook_at = codebook_at.lower().split(",")
 
     @property
     def device(self):
@@ -490,6 +491,7 @@ class CodebookModel(nn.Module, abc.ABC):
         for i in range(len(layers)):
             self.model_params.append(list(layers[i].parameters()))
             if i in self.layers_to_snap:
+                codebooks_in_layer = []
                 if self.codebook_at == "transformer_block":
                     layers[i] = TransformerLayerWrapper(
                         layers[i],
@@ -500,7 +502,7 @@ class CodebookModel(nn.Module, abc.ABC):
                     self.codebook_params += list(
                         layers[i].codebook_layer.codebook.parameters(),
                     )
-                    self.all_codebooks[i] = layers[i].codebook_layer
+                    codebooks_in_layer.append(layers[i].codebook_layer)
                 if "mlp" in self.codebook_at:
                     layers[i].mlp = MLPWrapper(
                         layers[i].mlp,
@@ -511,7 +513,7 @@ class CodebookModel(nn.Module, abc.ABC):
                     self.codebook_params += list(
                         layers[i].mlp.codebook_layer.codebook.parameters(),
                     )
-                    self.all_codebooks[i] = layers[i].mlp.codebook_layer
+                    codebooks_in_layer.append(layers[i].mlp.codebook_layer)
                 if "attention" in self.codebook_at:
                     layers[i].attn = TransformerLayerWrapper(
                         layers[i].attn,
@@ -522,41 +524,38 @@ class CodebookModel(nn.Module, abc.ABC):
                     self.codebook_params += list(
                         layers[i].attn.codebook_layer.codebook.parameters(),
                     )
-                    self.all_codebooks[i] = layers[i].attn.codebook_layer
+                    codebooks_in_layer.append(layers[i].attn.codebook_layer)
                 if "attention_and_mlp" in self.codebook_at:
-                    self.all_codebooks[i] = CodebookLayer(
-                        dim=self.model.config.hidden_size,
-                        num_codes=self.num_codes,
-                        snap_fn=self.snap_fn,
+                    codebooks_in_layer.append(
+                        CodebookLayer(
+                            dim=self.model.config.hidden_size,
+                            num_codes=self.num_codes,
+                            snap_fn=self.snap_fn,
+                        )
                     )
                     self.codebook_params += list(
-                        self.all_codebooks[i].codebook.parameters(),
+                        codebooks_in_layer[-1].codebook.parameters(),
                     )
                     layers[i] = PreResidualCodebookGPT2Block(
                         self.model.config,
                         i,
-                        self.all_codebooks[i],
+                        codebooks_in_layer[-1],
                     )
+                self.all_codebooks[i] = codebooks_in_layer
 
     def enable_codebooks(self):
         """Enable the use of codebooks in all the layers to snap."""
-        for i, layer in enumerate(self.all_codebooks):
-            if i in self.layers_to_snap:
+        for i, layers in enumerate(self.all_codebooks):
+            assert i in self.layers_to_snap
+            for layer in layers:
                 layer.snap = True
 
     def disable_codebooks(self):
         """Disable the use of codebooks in all the layers."""
-        for i, layer in enumerate(self.all_codebooks):
-            if i in self.layers_to_snap:
+        for i, layers in enumerate(self.all_codebooks):
+            assert i in self.layers_to_snap
+            for layer in layers:
                 layer.snap = False
-
-    def freeze_model_params(self):
-        for param in self.model.parameters():
-            param.requires_grad = False
-
-    def unfreeze_model_params(self):
-        for param in self.model.parameters():
-            param.requires_grad = True
 
     def get_codebook_params(self):
         """Gets codebook parameters."""
@@ -564,6 +563,14 @@ class CodebookModel(nn.Module, abc.ABC):
 
     def get_model_params(self):
         return self.model_params
+
+    def freeze_model_params(self):
+        for param in self.get_model_params():
+            param.requires_grad = False
+
+    def unfreeze_model_params(self):
+        for param in self.get_model_params():
+            param.requires_grad = True
 
     def get_input_embeddings(self):
         """Gets input embeddings of the model."""

@@ -1,6 +1,6 @@
 model_args:
   model_name_or_path: gpt2
-  # cache_dir: /data/.cache/huggingface/datasets
+  cache_dir: /data/.cache/huggingface/datasets
 data_args:
   dataset_name: wikitext
   dataset_config_name: wikitext-103-v1
@@ -11,14 +11,15 @@ training_args:
   overwrite_output_dir: True
   do_train: True
   do_eval: True
-  logging_first_step: True
   per_device_train_batch_size: 6
   per_device_eval_batch_size: 32
   warmup_ratio: 0.1
   learning_rate: 5e-5
   max_steps: 20000
+  logging_first_step: True
+  logging_steps: 100
   evaluation_strategy: steps
-  eval_steps: 200
+  eval_steps: 100
   save_steps: 10000
 
 get_baseline: False
