@@ -1,5 +1,5 @@
 model_args:
-  model_name_or_path: gpt2
+  model_name_or_path: sshleifer/tiny-gpt2
 data_args:
   dataset_name: the_pile
   max_train_samples: 2
@@ -22,5 +22,6 @@ layers_to_snap: [-1, -5]
 similarity_metric: euclidean
 codebook_at: mlp
 train_model_params: True
+model_lr_factor: 0.1
 tag_keys: []
 project: gpt2-codebook

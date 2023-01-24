@@ -456,6 +456,7 @@ class CodebookModel(nn.Module, abc.ABC):
         """
         super().__init__()
         self.model = model
+        self.model_params = list(model.parameters())
         self.num_codes = num_codes
         num_layers = self.num_layers()
         if type(layers_to_snap) is str and layers_to_snap == "all":
@@ -468,9 +469,8 @@ class CodebookModel(nn.Module, abc.ABC):
                     self.layers_to_snap[i] += num_layers
         self.layers_to_snap = sorted(self.layers_to_snap)
         self.codebook_params = []
-        self.model_params = []
         self.all_codebooks = {}
-        self.freeze_model_params()
+        # self.freeze_model_params()
         if similarity_metric == "euclidean":
             self.snap_fn = EuclideanSnapFunction
         elif similarity_metric == "inner_product":
@@ -489,7 +489,6 @@ class CodebookModel(nn.Module, abc.ABC):
         """Adds codebooks for the layers that are to be snapped."""
         layers = self.layers()
         for i in range(len(layers)):
-            self.model_params += list(layers[i].parameters())
             if i in self.layers_to_snap:
                 codebooks_in_layer = []
                 if self.codebook_at == "transformer_block":
@@ -565,15 +564,15 @@ class CodebookModel(nn.Module, abc.ABC):
         """Gets model's original parameters (not including codebook params)."""
         return self.model_params
 
-    def freeze_model_params(self):
-        """Freezes model's actual parameters."""
-        for param in self.get_model_params():
-            param.requires_grad = False
+    # def freeze_model_params(self):
+    #     """Freezes model's actual parameters."""
+    #     for param in self.get_model_params():
+    #         param.requires_grad = False
 
-    def unfreeze_model_params(self):
-        """Unfreezes model's actual parameters."""
-        for param in self.get_model_params():
-            param.requires_grad = True
+    # def unfreeze_model_params(self):
+    #     """Unfreezes model's actual parameters."""
+    #     for param in self.get_model_params():
+    #         param.requires_grad = True
 
     def get_input_embeddings(self):
         """Gets input embeddings of the model."""
