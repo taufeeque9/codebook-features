@@ -99,10 +99,20 @@ class BaseSnapFunction(torch.autograd.Function):
 
         Returns: tuple of gradient tensor wrt `inputs` and `codebook` tensors.
         """
-        codebook, output = ctx.saved_tensors
-        grad_codebook = torch.autograd.grad(output, codebook, grad_outputs)[0]
-        # straight through estimator
-        return grad_outputs, grad_codebook
+        # codebook, output = ctx.saved_tensors
+        # grad_codebook = torch.autograd.grad(output, codebook, grad_outputs)[0]
+
+        inputs, codebook, codebook_ids, outputs = ctx.saved_tensors
+        range_idx = torch.arange(codebook.shape[0]).unsqueeze(-1).unsqueeze(-1)
+        idx = codebook_ids.unsqueeze(0) == range_idx
+        grad_codebook = torch.stack(
+            [inputs[idx[i]].mean(0) for i in range(codebook.shape[0])]
+        )
+        grad_codebook = 2 * (codebook - grad_codebook)
+        # straight through estimator + commitment loss gradient
+        grad_inputs = grad_outputs + 2 * (inputs - outputs)
+
+        return grad_inputs, grad_codebook
 
 
 class InnerProductSnapFunction(BaseSnapFunction):
@@ -124,10 +134,12 @@ class InnerProductSnapFunction(BaseSnapFunction):
         """
         logits = torch.matmul(inputs, codebook.T)
         codebook_ids = logits.argmax(-1)
+
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-        ctx.save_for_backward(codebook, outputs)
+        # ctx.save_for_backward(codebook, outputs)
+        ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
         # outputs.grad_fn to be overridden.
@@ -156,7 +168,8 @@ class EuclideanSnapFunction(BaseSnapFunction):
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-        ctx.save_for_backward(codebook, outputs)
+        # ctx.save_for_backward(codebook, outputs)
+        ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
         # outputs.grad_fn to be overridden.
