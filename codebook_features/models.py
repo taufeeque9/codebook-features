@@ -104,10 +104,11 @@ class BaseSnapFunction(torch.autograd.Function):
 
         inputs, codebook, codebook_ids, outputs = ctx.saved_tensors
         range_idx = torch.arange(codebook.shape[0]).unsqueeze(-1).unsqueeze(-1)
+        range_idx = range_idx.to(inputs.device)
         idx = codebook_ids.unsqueeze(0) == range_idx
         grad_codebook = torch.stack(
             [inputs[idx[i]].mean(0) for i in range(codebook.shape[0])]
-        )
+        ).to(inputs.device)
         grad_codebook = 2 * (codebook - grad_codebook)
         # straight through estimator + commitment loss gradient
         grad_inputs = grad_outputs + 2 * (inputs - outputs)
