@@ -109,7 +109,7 @@ class BaseSnapFunction(torch.autograd.Function):
         mean_inputs = torch.stack(
             [inputs[idx[i]].mean(0) for i in range(codebook.shape[0])]
         ).to(inputs.device)
-        grad_codebook = 2 * (codebook - torch.nan_to_num(mean_inputs))
+        grad_codebook = 2 * torch.nan_to_num(codebook - mean_inputs)
         # straight through estimator + commitment loss gradient
         grad_inputs = grad_outputs + 2 * (inputs - outputs)
 
