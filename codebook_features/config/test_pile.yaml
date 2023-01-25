@@ -1,5 +1,5 @@
 model_args:
-  model_name_or_path: sshleifer/tiny-gpt2
+  model_name_or_path: taufeeque/tiny-gpt2
 data_args:
   dataset_name: the_pile
   max_train_samples: 2
