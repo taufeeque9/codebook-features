@@ -21,6 +21,7 @@ codebook_size: 100
 layers_to_snap: [-1, -5]
 similarity_metric: euclidean
 codebook_at: mlp
+num_compositional_codebooks: 2
 train_model_params: True
 model_lr_factor: 0.1
 tag_keys: []

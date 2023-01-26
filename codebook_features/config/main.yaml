@@ -11,8 +11,8 @@ training_args:
   overwrite_output_dir: True
   do_train: True
   do_eval: True
-  per_device_train_batch_size: 32
-  per_device_eval_batch_size: 64
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 32
   warmup_ratio: 0.1
   learning_rate: 5e-5
   max_steps: 20000
@@ -23,10 +23,11 @@ training_args:
   save_steps: 10000
 
 get_baseline: False
-codebook_size: 10000
-layers_to_snap: [0, 5]
+codebook_size: 1000
+layers_to_snap: all
 similarity_metric: euclidean
-codebook_at: mlp
+codebook_at: attention
+num_compositional_codebooks: 12
 train_model_params: True
 model_lr_factor: 0.1
 tag_keys: []

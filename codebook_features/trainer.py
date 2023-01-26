@@ -67,7 +67,7 @@ class CodebookTrainer(transformers.Trainer):
             for codebook_idx, codebooks in all_codebooks.items():
                 dead_code_count = 0
                 for codebook in codebooks:
-                    dead_code_count += codebook.num_codes - len(codebook.counts)
+                    dead_code_count += codebook.num_codes - codebook.active_codes
                 layer_codes = sum(codebook.num_codes for codebook in codebooks)
                 logs[metric_key_prefix + f"dead_code_fraction_layer{codebook_idx}"] = (
                     dead_code_count / layer_codes

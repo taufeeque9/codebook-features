@@ -204,10 +204,20 @@ class CodebookLayer(nn.Module):
             self.codebook = KmeansEmbedding(num_embeddings=num_codes, embedding_dim=dim)
         else:
             self.codebook = nn.Embedding(num_embeddings=num_codes, embedding_dim=dim)
-        self.num_codes = num_codes
+        self._num_codes = num_codes
         self.counts = Counter()
         self.soft_snap = soft_snap
         self.snap_fn = snap_fn
+
+    @property
+    def active_codes(self):
+        """Return the number of active codes."""
+        return len(self.counts)
+
+    @property
+    def num_codes(self):
+        """Return the total number of codes."""
+        return self._num_codes
 
     def forward(self, x):
         """Snaps activations to elements in the codebook.
@@ -265,6 +275,81 @@ class CodebookLayer(nn.Module):
                 pass
 
 
+class CompositionalCodebookLayer(nn.Module):
+    """Module that applies distinct codebooks to chunks of input vectors."""
+
+    def __init__(
+        self,
+        dim: int,
+        num_codes: int,
+        kmeans_init=False,
+        soft_snap: bool = False,
+        snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+        num_codebooks: int = 1,
+    ):
+        """Create the compositional codebook layer.
+
+        Args:
+        ----
+            dim: dimension size of the codebook features.
+            num_codes: number of codebook features to have.
+            kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
+            soft_snap: whether to snap the input using softmax. Defaults to False.
+            snap_fn: snap function to use.
+                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+        """
+        super().__init__()
+        if dim % num_codebooks != 0:
+            raise ValueError(
+                "dim must be divisible by num_codebooks. Got dim: {}, num_codebooks: {}".format(
+                    dim, num_codebooks
+                )
+            )
+        self.num_codebooks = num_codebooks
+        self.codebook = nn.ModuleList(
+            [
+                CodebookLayer(
+                    dim // num_codebooks,
+                    num_codes,
+                    kmeans_init=kmeans_init,
+                    soft_snap=soft_snap,
+                    snap_fn=snap_fn,
+                )
+                for _ in range(num_codebooks)
+            ]
+        )
+
+    @property
+    def active_codes(self):
+        """Return the number of active codes in all the codebooks."""
+        return sum(codebook.active_codes for codebook in self.codebook)
+
+    @property
+    def num_codes(self):
+        """Return the total number of codes in all the codebooks."""
+        return sum(codebook.num_codes for codebook in self.codebook)
+
+    def forward(self, x):
+        """Snaps activations to elements in the codebook.
+
+        Args:
+        ----
+            x: input tensor of shape: (batch_size, seq_len, dim).
+
+        Returns: output with the feature vectors replaced using the compositional codebook.
+        """
+        assert len(x.shape) == 3
+        output = torch.cat(
+            [
+                self.codebook[i](chunk)
+                for i, chunk in enumerate(x.chunk(self.num_codebooks, dim=-1))
+            ],
+            dim=-1,
+        )
+        return output
+
+
 class CodebookWrapper(nn.Module, abc.ABC):
     """Wraps a nn module by applying codebooks on the output of the layer."""
 
@@ -274,6 +359,7 @@ class CodebookWrapper(nn.Module, abc.ABC):
         dim: int,
         num_codes: int,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+        num_codebooks: int = 1,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -284,10 +370,13 @@ class CodebookWrapper(nn.Module, abc.ABC):
             num_codes: number of codebook features to have.
             snap_fn: snap function to use.
                 Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
         """
         super().__init__()
         self.module_layer = module_layer
-        self.codebook_layer = CodebookLayer(dim, num_codes, snap_fn=snap_fn)
+        self.codebook_layer = CompositionalCodebookLayer(
+            dim, num_codes, snap_fn=snap_fn, num_codebooks=num_codebooks
+        )
         self.snap = True
 
     @abc.abstractmethod
@@ -304,6 +393,7 @@ class TransformerLayerWrapper(CodebookWrapper):
         dim: int,
         num_codes: int,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+        num_codebooks: int = 1,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -314,9 +404,14 @@ class TransformerLayerWrapper(CodebookWrapper):
             num_codes: number of codebook features to have.
             snap_fn: snap function to use.
                 Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
         """
         super().__init__(
-            module_layer=module_layer, dim=dim, num_codes=num_codes, snap_fn=snap_fn
+            module_layer=module_layer,
+            dim=dim,
+            num_codes=num_codes,
+            snap_fn=snap_fn,
+            num_codebooks=num_codebooks,
         )
 
     def forward(self, *args, **kwargs):
@@ -342,6 +437,7 @@ class MLPWrapper(CodebookWrapper):
         dim: int,
         num_codes: int,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+        num_codebooks: int = 1,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -352,9 +448,14 @@ class MLPWrapper(CodebookWrapper):
             num_codes: number of codebook features to have.
             snap_fn: snap function to use.
                 Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
         """
         super().__init__(
-            module_layer=module_layer, dim=dim, num_codes=num_codes, snap_fn=snap_fn
+            module_layer=module_layer,
+            dim=dim,
+            num_codes=num_codes,
+            snap_fn=snap_fn,
+            num_codebooks=num_codebooks,
         )
 
     def forward(self, *args, **kwargs):
@@ -454,6 +555,7 @@ class CodebookModel(nn.Module, abc.ABC):
         self,
         model: nn.Module,
         num_codes: int,
+        num_codebooks: int = 1,
         layers_to_snap: Sequence = (),
         similarity_metric: str = "euclidean",
         codebook_at: str = "mlp",
@@ -464,14 +566,17 @@ class CodebookModel(nn.Module, abc.ABC):
         ----
             model: torch model to apply codebooks to.
             num_codes: number of codebook features to have.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
                 Defaults to []. Can contain negative numbers to index from the last layers.
             similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
+            codebook_at: where to apply the codebook. Can be either 'mlp' or 'attention'.
         """
         super().__init__()
         self.model = model
         self.model_params = list(model.parameters())
         self.num_codes = num_codes
+        self.num_codebooks = num_codebooks
         num_layers = self.num_layers()
         if type(layers_to_snap) is str and layers_to_snap == "all":
             self.layers_to_snap = list(range(num_layers))
@@ -511,6 +616,7 @@ class CodebookModel(nn.Module, abc.ABC):
                         dim=self.model.config.hidden_size,
                         num_codes=self.num_codes,
                         snap_fn=self.snap_fn,
+                        num_codebooks=self.num_codebooks,
                     )
                     self.codebook_params += list(
                         layers[i].codebook_layer.codebook.parameters(),
@@ -522,6 +628,7 @@ class CodebookModel(nn.Module, abc.ABC):
                         dim=self.model.config.hidden_size,
                         num_codes=self.num_codes,
                         snap_fn=self.snap_fn,
+                        num_codebooks=self.num_codebooks,
                     )
                     self.codebook_params += list(
                         layers[i].mlp.codebook_layer.codebook.parameters(),
@@ -533,6 +640,7 @@ class CodebookModel(nn.Module, abc.ABC):
                         dim=self.model.config.hidden_size,
                         num_codes=self.num_codes,
                         snap_fn=self.snap_fn,
+                        num_codebooks=self.num_codebooks,
                     )
                     self.codebook_params += list(
                         layers[i].attn.codebook_layer.codebook.parameters(),
@@ -540,10 +648,11 @@ class CodebookModel(nn.Module, abc.ABC):
                     codebooks_in_layer.append(layers[i].attn.codebook_layer)
                 if "attention_and_mlp" in self.codebook_at:
                     codebooks_in_layer.append(
-                        CodebookLayer(
+                        CompositionalCodebookLayer(
                             dim=self.model.config.hidden_size,
                             num_codes=self.num_codes,
                             snap_fn=self.snap_fn,
+                            num_codebooks=self.num_codebooks,
                         )
                     )
                     self.codebook_params += list(
@@ -614,6 +723,7 @@ class BertCodebookModel(CodebookModel):
         self,
         model,
         num_codes,
+        num_codebooks: int = 1,
         layers_to_snap=(),
         similarity_metric="euclidean",
         codebook_at: str = "mlp",
@@ -624,12 +734,19 @@ class BertCodebookModel(CodebookModel):
         ----
             model: bert model to apply codebooks to.
             num_codes: number of codebook features to have.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
                 Defaults to []. Can contain negative numbers to index from the last layers.
-            similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
+            similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
+            codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
         """
         super().__init__(
-            model, num_codes, layers_to_snap, similarity_metric, codebook_at
+            model,
+            num_codes,
+            num_codebooks,
+            layers_to_snap,
+            similarity_metric,
+            codebook_at,
         )
         self.add_codebooks()
         self.forward = self.model.forward
@@ -653,6 +770,7 @@ class GPT2CodebookModel(CodebookModel):
         self,
         model,
         num_codes,
+        num_codebooks: int = 1,
         layers_to_snap=(),
         similarity_metric="euclidean",
         codebook_at: str = "mlp",
@@ -663,12 +781,19 @@ class GPT2CodebookModel(CodebookModel):
         ----
             model: GPT2 model to apply codebooks to.
             num_codes: number of codebook features to have.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
                 Defaults to []. Can contain negative numbers to index from the last layers.
-            similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
+            similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
+            codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
         """
         super().__init__(
-            model, num_codes, layers_to_snap, similarity_metric, codebook_at
+            model,
+            num_codes,
+            num_codebooks,
+            layers_to_snap,
+            similarity_metric,
+            codebook_at,
         )
         self.add_codebooks()
         self.forward = self.model.forward

@@ -82,9 +82,10 @@ def main(cfg):
 
     wandb.log(baseline_metrics, commit=False)
     model = models.GPT2CodebookModel(
-        model,
-        cfg.codebook_size,
-        cfg.layers_to_snap,
+        model=model,
+        num_codes=cfg.codebook_size,
+        num_codebooks=cfg.num_compositional_codebooks,
+        layers_to_snap=cfg.layers_to_snap,
         similarity_metric=cfg.similarity_metric,
         codebook_at=cfg.codebook_at,
     )
