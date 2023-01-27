@@ -26,7 +26,7 @@ def main(cfg):
     training_args = transformers.TrainingArguments(**cfg.training_args)
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
-    training_args.local_rank = os.environ.get("LOCAL_RANK", -1)
+    training_args.local_rank = int(os.environ.get("LOCAL_RANK", -1))
 
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
     # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
