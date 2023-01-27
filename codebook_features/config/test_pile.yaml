@@ -24,5 +24,6 @@ codebook_at: mlp
 num_compositional_codebooks: 2
 train_model_params: True
 model_lr_factor: 0.1
+vqvae_loss: False
 tag_keys: []
 project: gpt2-codebook

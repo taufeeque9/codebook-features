@@ -2,6 +2,7 @@
 
 import dataclasses
 import json
+import os
 
 import hydra
 import omegaconf
@@ -25,6 +26,7 @@ def main(cfg):
     training_args = transformers.TrainingArguments(**cfg.training_args)
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
+    training_args.local_rank = os.environ.get("LOCAL_RANK", -1)
 
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
     # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
@@ -44,13 +46,14 @@ def main(cfg):
     tags = [training_args.run_name]
     for key in cfg.tag_keys:
         tags.append(f"{key}={flat_cfg_dict[key]}")
-    wandb.init(
-        project=cfg.project,
-        name=training_args.run_name,
-        tags=tags,
-        settings=wandb.Settings(code_dir="."),
-        config=cfg_dict,
-    )
+    if training_args.local_rank == 0:
+        wandb.init(
+            project=cfg.project,
+            name=training_args.run_name,
+            tags=tags,
+            settings=wandb.Settings(code_dir="."),
+            config=cfg_dict,
+        )
 
     model = transformers.GPT2LMHeadModel.from_pretrained(
         cfg.model_args.model_name_or_path,
@@ -79,8 +82,8 @@ def main(cfg):
                 baseline_metrics = json.load(f)
         except FileNotFoundError:
             baseline_metrics = {}
-
-    wandb.log(baseline_metrics, commit=False)
+    if training_args.local_rank == 0:
+        wandb.log(baseline_metrics, commit=False)
     model = models.GPT2CodebookModel(
         model=model,
         num_codes=cfg.codebook_size,
@@ -88,6 +91,7 @@ def main(cfg):
         layers_to_snap=cfg.layers_to_snap,
         similarity_metric=cfg.similarity_metric,
         codebook_at=cfg.codebook_at,
+        vqvae_loss=cfg.vqvae_loss,
     )
     if cfg.train_model_params:
         # model.unfreeze_model_params()
