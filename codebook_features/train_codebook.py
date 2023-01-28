@@ -43,10 +43,13 @@ def main(cfg):
     flat_cfg_dict = pd.json_normalize(cfg_dict, sep="@").to_dict(orient="records")[0]
     flat_cfg_dict = {k.split("@")[-1]: v for k, v in flat_cfg_dict.items()}
 
-    tags = [training_args.run_name]
+    # prepare tags and wandb run name from tags
+    tags = cfg.tags
     for key in cfg.tag_keys:
         tags.append(f"{key}={flat_cfg_dict[key]}")
-    if training_args.local_rank == 0:
+    cfg_dict["training_args"]["run_name"] = training_args.run_name = "-".join(tags)
+
+    if training_args.local_rank <= 0:
         wandb.init(
             project=cfg.project,
             name=training_args.run_name,

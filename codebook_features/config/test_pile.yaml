@@ -26,4 +26,5 @@ train_model_params: True
 model_lr_factor: 0.1
 vqvae_loss: False
 tag_keys: []
+tags: []
 project: gpt2-codebook

@@ -15,7 +15,7 @@ training_args:
   max_steps: 2
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
-  report_to: none
+  report_to: wandb
 
 get_baseline: False
 codebook_size: 100
@@ -26,5 +26,6 @@ num_compositional_codebooks: 2
 train_model_params: False
 model_lr_factor: 0.1
 vqvae_loss: True
-tag_keys: []
+tag_keys: ["codebook_at", "per_device_train_batch_size", "model_name_or_path"]
+tags: ["test", "TGPT"]
 project: gpt2-codebook
