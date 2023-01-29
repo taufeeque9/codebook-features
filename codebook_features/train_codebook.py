@@ -13,6 +13,20 @@ import transformers
 import wandb
 from codebook_features import models, run_clm
 
+shortened_args = {
+    "model_name_or_path": "mod",
+    "learning_rate": "lr",
+    "per_device_train_batch_size": "bs",
+    "codebook_size": "cbs",
+    "num_compositional_codebooks": "nccb",
+    "layers_to_snap": "cb_layers",
+    "similarity_metric": "sim",
+    "codebook_at": "cb_at",
+    "vqvae_loss": "vqvae",
+    "train_model_params": "train_mod",
+    "model_lr_factor": "mod_lrf",
+}
+
 
 @hydra.main(config_path="config", config_name="main")
 def main(cfg):
@@ -44,10 +58,10 @@ def main(cfg):
     flat_cfg_dict = {k.split("@")[-1]: v for k, v in flat_cfg_dict.items()}
 
     # prepare tags and wandb run name from tags
-    tags = cfg.tags
-    for key in cfg.tag_keys:
-        tags.append(f"{key}={flat_cfg_dict[key]}")
-    cfg_dict["training_args"]["run_name"] = training_args.run_name = "-".join(tags)
+    tags = sorted(cfg.tags)
+    for key in sorted(cfg.tag_keys):
+        tags.append(f"{shortened_args[key]}: {flat_cfg_dict[key]}")
+    cfg_dict["training_args"]["run_name"] = training_args.run_name = ", ".join(tags)
 
     if training_args.local_rank <= 0:
         wandb.init(
