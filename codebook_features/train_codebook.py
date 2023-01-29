@@ -61,7 +61,8 @@ def main(cfg):
     tags = sorted(cfg.tags)
     for key in sorted(cfg.tag_keys):
         tags.append(f"{shortened_args[key]}: {flat_cfg_dict[key]}")
-    cfg_dict["training_args"]["run_name"] = training_args.run_name = ", ".join(tags)
+    if tags:
+        cfg_dict["training_args"]["run_name"] = training_args.run_name = ", ".join(tags)
 
     if training_args.local_rank <= 0:
         wandb.init(
