@@ -11,7 +11,7 @@ import torch
 import transformers
 
 import wandb
-from codebook_features import models, run_clm
+from codebook_features import models, run_clm, trainer
 
 shortened_args = {
     "model_name_or_path": "mod",
@@ -140,6 +140,7 @@ def main(cfg):
         training_args=training_args,
         model=model,
         optimizers=(optimizer, None),
+        callbacks=[trainer.WandbCallback()],
     )
     return metrics, baseline_metrics
 

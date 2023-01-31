@@ -6,6 +6,7 @@ import torch
 import transformers
 from torch import nn
 
+import wandb
 from codebook_features import models
 
 
@@ -73,6 +74,16 @@ class CodebookTrainer(transformers.Trainer):
                     logs[
                         metric_key_prefix + f"dead_code_fraction_layer{codebook_idx}"
                     ] = (dead_code_count / layer_codes)
+                    logs[metric_key_prefix + f"mean_norm_layer{codebook_idx}"] = sum(
+                        codebook.avg_norm() for codebook in codebooks
+                    ) / len(codebooks)
+                    # table = wandb.Table(
+                    #     data=codebooks[0].most_common_counts(),
+                    #     columns=["freq"],
+                    # )
+                    # logs[
+                    #     metric_key_prefix + f"cb_histogram_layer{codebook_idx}"
+                    # ] = wandb.plot.histogram(table, "freq", title="Codebook Histogram")
                 overall_dead_code_count += dead_code_count
                 total_codes += layer_codes
 
@@ -81,3 +92,25 @@ class CodebookTrainer(transformers.Trainer):
                     overall_dead_code_count / total_codes
                 )
         super().log(logs)
+
+
+class WandbCallback(transformers.integrations.WandbCallback):
+    def on_log(self, args, state, control, model=None, logs=None, **kwargs):
+        if isinstance(model, models.CodebookModel):
+            metric_key_prefix = ""
+            if any("train_" in k for k in logs.keys()):
+                metric_key_prefix = "train_"
+            elif any("eval_" in k for k in logs.keys()):
+                metric_key_prefix = "eval_"
+            elif any("test_" in k for k in logs.keys()):
+                metric_key_prefix = "test_"
+            for codebook_idx, codebooks in model.all_codebooks.items():
+                table = wandb.Table(
+                    data=codebooks[0].most_common_counts(),
+                    columns=["freq"],
+                )
+                logs[
+                    metric_key_prefix + f"cb_histogram_layer{codebook_idx}"
+                ] = wandb.plot.histogram(table, "freq", title="Codebook Histogram")
+            model.reset_codebook_counts()
+        super().on_log(args, state, control, model, logs, **kwargs)

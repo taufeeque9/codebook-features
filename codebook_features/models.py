@@ -4,6 +4,7 @@ import abc
 from collections import Counter
 from typing import Any, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import torch
 import transformers
 from sklearn.cluster import KMeans
@@ -253,6 +254,14 @@ class CodebookLayer(nn.Module):
             output = output.sum(-2)  # codebook size
         return output
 
+    def reset_counts(self):
+        """Reset the counts of the codebook features."""
+        self.counts.clear()
+
+    def avg_norm(self):
+        """Return the average norm of the codebook features."""
+        return self.codebook.weight.norm(p=2, dim=1).mean().item()
+
     # TODO: Consider using a fraction for the threshold instead of an absolute number
     def expire_codes(self, threshold: int = 1):
         """re-initialize the codebook features with activation count below threshold.
@@ -277,6 +286,14 @@ class CodebookLayer(nn.Module):
                 self.codebook.weight[underused_codes] = new_codes
             except IndexError:
                 pass
+
+    def most_common_counts(self):
+        """Return the most common codebook feature counts."""
+        counts = np.zeros((self.num_codes, 1))
+        counts[list(self.counts.keys())] = np.array(list(self.counts.values())).reshape(
+            -1, 1
+        )
+        return counts
 
 
 class CompositionalCodebookLayer(nn.Module):
@@ -352,6 +369,24 @@ class CompositionalCodebookLayer(nn.Module):
             dim=-1,
         )
         return output
+
+    def reset_counts(self):
+        """Reset the counts of the codebook features."""
+        for codebook in self.codebook:
+            codebook.reset_counts()
+
+    def avg_norm(self):
+        """Return the average norm of the codebook features."""
+        return (
+            sum(codebook.avg_norm() for codebook in self.codebook) / self.num_codebooks
+        )
+
+    def most_common_counts(self):
+        """Return the counts of the codebook features."""
+        counts = np.zeros((self.num_codes // self.num_codebooks, 1))
+        for codebook in self.codebook:
+            counts += codebook.most_common_counts()
+        return counts
 
 
 class CodebookWrapper(nn.Module, abc.ABC):
@@ -672,9 +707,16 @@ class CodebookModel(nn.Module, abc.ABC):
                     )
                 self.all_codebooks[i] = codebooks_in_layer
 
+    def reset_codebook_counts(self):
+        """Resets the counts of the codebooks."""
+        for i, layers in self.all_codebooks.items():
+            assert i in self.layers_to_snap
+            for layer in layers:
+                layer.reset_counts()
+
     def enable_codebooks(self):
         """Enable the use of codebooks in all the layers to snap."""
-        for i, layers in enumerate(self.all_codebooks):
+        for i, layers in self.all_codebooks.items():
             assert i in self.layers_to_snap
             for layer in layers:
                 layer.snap = True
