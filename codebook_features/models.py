@@ -262,6 +262,10 @@ class CodebookLayer(nn.Module):
         """Return the average norm of the codebook features."""
         return self.codebook.weight.norm(p=2, dim=1).mean().item()
 
+    def max_norm(self):
+        """Return the maximum norm of the codebook features."""
+        return self.codebook.weight.norm(p=2, dim=1).max().item()
+
     # TODO: Consider using a fraction for the threshold instead of an absolute number
     def expire_codes(self, threshold: int = 1):
         """re-initialize the codebook features with activation count below threshold.
@@ -380,6 +384,10 @@ class CompositionalCodebookLayer(nn.Module):
         return (
             sum(codebook.avg_norm() for codebook in self.codebook) / self.num_codebooks
         )
+
+    def max_norm(self):
+        """Return the average norm of the codebook features."""
+        return max(codebook.max_norm() for codebook in self.codebook)
 
     def most_common_counts(self):
         """Return the counts of the codebook features."""
@@ -587,6 +595,66 @@ class PreResidualCodebookGPT2Block(transformers.models.gpt2.modeling_gpt2.GPT2Bl
         return outputs  # hidden_states, present, (attentions, cross_attentions)
 
 
+class PreResidualCodebookGPTNeoXBlock(
+    transformers.models.gpt_neox.modeling_gpt_neox.GPTNeoXLayer
+):
+    def __init__(self, config, layer_idx=None, codebook_layer=None):
+        assert not config.add_cross_attention, "Not implemented"
+        super().__init__(config)
+        self.codebook_layer = codebook_layer
+        self.snap = True
+        self.layer_idx = layer_idx
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        head_mask=None,
+        use_cache=False,
+        layer_past=None,
+        output_attentions=False,
+    ):
+
+        attention_layer_outputs = self.attention(
+            self.input_layernorm(hidden_states),
+            attention_mask=attention_mask,
+            layer_past=layer_past,
+            head_mask=head_mask,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+        )
+        attn_output = attention_layer_outputs[
+            0
+        ]  # output_attn: attn_output, present, (attn_weights)
+        outputs = attention_layer_outputs[1:]
+
+        if self.use_parallel_residual:
+            # pseudocode:
+            # x = x + attn(ln1(x)) + mlp(ln2(x))
+            mlp_output = self.mlp(self.post_attention_layernorm(hidden_states))
+            main_stream = mlp_output + attn_output
+            if self.codebook_layer and self.snap:
+                main_stream = self.codebook_layer(main_stream)
+            hidden_states = main_stream + hidden_states
+        else:
+            raise NotImplementedError("Not implemented")
+            # pseudocode:
+            # x = x + attn(ln1(x))
+            # x = x + mlp(ln2(x))
+            attn_output = attn_output + hidden_states
+            mlp_output = self.mlp(self.post_attention_layernorm(attn_output))
+            hidden_states = mlp_output + attn_output
+
+        if use_cache:
+            outputs = (
+                hidden_states,
+            ) + outputs  # hidden_states, present, (attn_weights)
+        else:
+            outputs = (hidden_states,) + outputs[1:]  # hidden_states, (attn_weights)
+
+        return outputs
+
+
 class CodebookModel(nn.Module, abc.ABC):
     """ABC for a model containing codebook features."""
 
@@ -665,29 +733,30 @@ class CodebookModel(nn.Module, abc.ABC):
                     )
                     codebooks_in_layer.append(layers[i].codebook_layer)
                 if "mlp" in self.codebook_at:
-                    layers[i].mlp = MLPWrapper(
-                        layers[i].mlp,
+                    wrapped_mlp = MLPWrapper(
+                        layers[i].__getattr__(self.mlp_key),
                         dim=self.model.config.hidden_size,
                         num_codes=self.num_codes,
                         snap_fn=self.snap_fn,
                         num_codebooks=self.num_codebooks,
                     )
                     self.codebook_params += list(
-                        layers[i].mlp.codebook_layer.codebook.parameters(),
+                        wrapped_mlp.codebook_layer.codebook.parameters(),
                     )
-                    codebooks_in_layer.append(layers[i].mlp.codebook_layer)
+                    codebooks_in_layer.append(wrapped_mlp.codebook_layer)
                 if "attention" in self.codebook_at:
-                    layers[i].attn = TransformerLayerWrapper(
-                        layers[i].attn,
+                    wrapped_attn = TransformerLayerWrapper(
+                        layers[i].__getattr__(self.attention_key),
                         dim=self.model.config.hidden_size,
                         num_codes=self.num_codes,
                         snap_fn=self.snap_fn,
                         num_codebooks=self.num_codebooks,
                     )
+                    layers[i].__setattr__(self.attention_key, wrapped_attn)
                     self.codebook_params += list(
-                        layers[i].attn.codebook_layer.codebook.parameters(),
+                        wrapped_attn.codebook_layer.codebook.parameters(),
                     )
-                    codebooks_in_layer.append(layers[i].attn.codebook_layer)
+                    codebooks_in_layer.append(wrapped_attn.codebook_layer)
                 if "attention_and_mlp" in self.codebook_at:
                     codebooks_in_layer.append(
                         CompositionalCodebookLayer(
@@ -700,7 +769,7 @@ class CodebookModel(nn.Module, abc.ABC):
                     self.codebook_params += list(
                         codebooks_in_layer[-1].codebook.parameters(),
                     )
-                    layers[i] = PreResidualCodebookGPT2Block(
+                    layers[i] = self.pre_residual_codebook_cls(
                         self.model.config,
                         i,
                         codebooks_in_layer[-1],
@@ -749,10 +818,6 @@ class CodebookModel(nn.Module, abc.ABC):
     def get_input_embeddings(self):
         """Gets input embeddings of the model."""
         return self.model.get_input_embeddings()
-
-    def resize_token_embeddings(self, new_num_tokens):
-        """Resizes token embeddings of the model."""
-        return self.model.resize_token_embeddings(new_num_tokens)
 
     @abc.abstractmethod
     def layers(self):
@@ -870,3 +935,111 @@ class GPT2CodebookModel(CodebookModel):
     def num_layers(self):
         """Returns the number of transformer layers in the model."""
         return self.model.config.n_layer
+
+    def resize_token_embeddings(self, new_num_tokens):
+        """Resizes token embeddings of the model."""
+        return self.model.resize_token_embeddings(new_num_tokens)
+
+    @property
+    def attention_key(self):
+        """Returns the attribute name used for attention in the model."""
+        return "attn"
+
+    @property
+    def mlp_key(self):
+        """Returns the attribute name used for mlp in the model."""
+        return "mlp"
+
+    @property
+    def pre_residual_codebook_cls(self):
+        """Returns the class to use for codebook before residual."""
+        return PreResidualCodebookGPT2Block
+
+
+class GPTNeoXCodebookModel(CodebookModel):
+    """Codebook model for GPT2."""
+
+    def __init__(
+        self,
+        model,
+        num_codes,
+        num_codebooks: int = 1,
+        layers_to_snap=(),
+        similarity_metric="euclidean",
+        codebook_at: str = "mlp",
+        vqvae_loss: bool = False,
+    ):
+        """Build the codebook based model.
+
+        Args:
+        ----
+            model: GPT2 model to apply codebooks to.
+            num_codes: number of codebook features to have.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
+                Defaults to []. Can contain negative numbers to index from the last layers.
+            similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
+            codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
+            vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
+        """
+        super().__init__(
+            model=model,
+            num_codes=num_codes,
+            num_codebooks=num_codebooks,
+            layers_to_snap=layers_to_snap,
+            similarity_metric=similarity_metric,
+            codebook_at=codebook_at,
+            vqvae_loss=vqvae_loss,
+        )
+        self.add_codebooks()
+        self.forward = self.model.forward
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "model":
+            self.forward = self.model.forward
+
+    def forward(self, *args, labels: Optional[torch.LongTensor] = None, **kwargs):
+        raise RuntimeError(
+            "This shouldn't get executed as forward is overridden in init."
+        )
+
+    def layers(self):
+        """Returns the list of transformer layers of the model."""
+        return self.model.gpt_neox.layers
+
+    def num_layers(self):
+        """Returns the number of transformer layers in the model."""
+        return self.model.config.num_hidden_layers
+
+    def resize_token_embeddings(self, new_num_tokens):
+        """Resizes token embeddings of the model."""
+        raise NotImplementedError("Not implemented for GPTNeoX.")
+
+    @property
+    def attention_key(self):
+        """Returns the attribute name used for attention in the model."""
+        return "attention"
+
+    @property
+    def mlp_key(self):
+        """Returns the attribute name used for mlp in the model."""
+        return "mlp"
+
+    @property
+    def pre_residual_codebook_cls(self):
+        """Returns the class to use for codebook before residual."""
+        return PreResidualCodebookGPTNeoXBlock
+
+
+def wrap_codebook(model, *args, **kwargs):
+    if model.config.model_type == "gpt2":
+        return GPT2CodebookModel(model, *args, **kwargs)
+    elif model.config.model_type == "gpt_neox":
+        return GPTNeoXCodebookModel(model, *args, **kwargs)
+    elif model.config.model_type == "bert":
+        return BertCodebookModel(model, *args, **kwargs)
+    else:
+        raise ValueError(
+            f"Model type {model.config.model_type} not supported with codebooks."
+        )

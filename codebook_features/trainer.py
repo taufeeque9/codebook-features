@@ -77,6 +77,9 @@ class CodebookTrainer(transformers.Trainer):
                     logs[metric_key_prefix + f"mean_norm_layer{codebook_idx}"] = sum(
                         codebook.avg_norm() for codebook in codebooks
                     ) / len(codebooks)
+                    logs[metric_key_prefix + f"max_norm_layer{codebook_idx}"] = max(
+                        codebook.max_norm() for codebook in codebooks
+                    )
                     # table = wandb.Table(
                     #     data=codebooks[0].most_common_counts(),
                     #     columns=["freq"],
