@@ -20,7 +20,8 @@ class GradientCheckerOptimizer(torch.optim.AdamW):
                 assert p.grad is not None, f"grad is None for: {p}"
         super().step(*args, **kwargs)
 
-@pytest.mark.parametrize("config_name", ["test", "test_pile"])
+
+@pytest.mark.parametrize("config_name", ["test", "test_pile", "test_pythia"])
 def test_train_codebook(config_name):
     with hydra.initialize_config_module(
         version_base=None, config_module="codebook_features.config"

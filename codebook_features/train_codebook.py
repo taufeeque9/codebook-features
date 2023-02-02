@@ -73,7 +73,7 @@ def main(cfg):
             config=cfg_dict,
         )
 
-    model = transformers.GPT2LMHeadModel.from_pretrained(
+    model = transformers.AutoModelForCausalLM.from_pretrained(
         cfg.model_args.model_name_or_path,
     )
     baseline_output_dir = training_args.output_dir + "_baseline"
@@ -102,7 +102,7 @@ def main(cfg):
             baseline_metrics = {}
     if training_args.local_rank == 0:
         wandb.log(baseline_metrics, commit=False)
-    model = models.GPT2CodebookModel(
+    model = models.wrap_codebook(
         model=model,
         num_codes=cfg.codebook_size,
         num_codebooks=cfg.num_compositional_codebooks,

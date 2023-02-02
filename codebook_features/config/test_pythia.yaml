@@ -1,5 +1,5 @@
 model_args:
-  model_name_or_path: taufeeque/tiny-gpt2
+  model_name_or_path: EleutherAI/pythia-70m-deduped
 data_args:
   dataset_name: wikitext
   dataset_config_name: wikitext-2-raw-v1
@@ -23,7 +23,7 @@ get_baseline: False
 codebook_size: 100
 layers_to_snap: [0,1]
 similarity_metric: euclidean
-codebook_at: attention_and_mlp
+codebook_at: attention
 num_compositional_codebooks: 2
 train_model_params: False
 model_lr_factor: 0.1
