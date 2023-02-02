@@ -89,6 +89,7 @@ class BaseSnapFunction(torch.autograd.Function):
     This is the base class. It should be subclassed with a forward function."""
 
     vqvae_loss = False
+    k = 1
 
     @staticmethod
     def backward(ctx, grad_outputs, grad_codebook_ids):
@@ -104,7 +105,14 @@ class BaseSnapFunction(torch.autograd.Function):
         """
         inputs, codebook, codebook_ids, outputs = ctx.saved_tensors
         if BaseSnapFunction.vqvae_loss:
-            range_idx = torch.arange(codebook.shape[0]).unsqueeze(-1).unsqueeze(-1)
+            raise NotImplementedError("VQVAE backward not implemeted with multicode.")
+            grad_outputs / 3
+            range_idx = (
+                torch.arange(codebook.shape[0])
+                .unsqueeze(-1)
+                .unsqueeze(-1)
+                .unsqueeze(-1)
+            )
             range_idx = range_idx.to(inputs.device)
             idx = codebook_ids.unsqueeze(0) == range_idx
             mean_inputs = torch.stack(
@@ -139,11 +147,12 @@ class InnerProductSnapFunction(BaseSnapFunction):
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
         logits = torch.matmul(inputs, codebook.T)
-        codebook_ids = logits.argmax(-1)
+        codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)[1]
 
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
+            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
         # ctx.save_for_backward(codebook, outputs)
         ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
@@ -169,11 +178,12 @@ class EuclideanSnapFunction(BaseSnapFunction):
 
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
-        logits = torch.cdist(inputs, codebook, p=2)
-        codebook_ids = logits.argmin(-1)
+        logits = -torch.cdist(inputs, codebook, p=2) # logits are negative distances
+        codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)[1]
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
+            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
         # ctx.save_for_backward(codebook, outputs)
         ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
@@ -667,6 +677,7 @@ class CodebookModel(nn.Module, abc.ABC):
         similarity_metric: str = "euclidean",
         codebook_at: str = "mlp",
         vqvae_loss: bool = False,
+        k_codebook: int = 1,
     ) -> None:
         """Build the codebook based model.
 
@@ -680,11 +691,14 @@ class CodebookModel(nn.Module, abc.ABC):
             similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
             codebook_at: where to apply the codebook. Can be either 'mlp' or 'attention'.
             vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
+            k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__()
         self.model = model
         self.model_params = list(model.parameters())
         self.num_codes = num_codes
+        if num_codebooks == -1:
+            num_codebooks = self.model.num_heads
         self.num_codebooks = num_codebooks
         num_layers = self.num_layers()
         if type(layers_to_snap) is str and layers_to_snap == "all":
@@ -708,6 +722,7 @@ class CodebookModel(nn.Module, abc.ABC):
                 "`similarity_metric` should be either 'euclidean' or 'inner_product'."
             )
         BaseSnapFunction.vqvae_loss = vqvae_loss
+        BaseSnapFunction.k = k_codebook
         self.codebook_at = codebook_at.lower().split(",")
 
     @property
@@ -842,6 +857,7 @@ class BertCodebookModel(CodebookModel):
         similarity_metric="euclidean",
         codebook_at: str = "mlp",
         vqvae_loss: bool = False,
+        k_codebook: int = 1,
     ):
         """Build the codebook based model.
 
@@ -855,6 +871,7 @@ class BertCodebookModel(CodebookModel):
             similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
             codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
             vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
+            k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(
             model=model,
@@ -864,6 +881,7 @@ class BertCodebookModel(CodebookModel):
             similarity_metric=similarity_metric,
             codebook_at=codebook_at,
             vqvae_loss=vqvae_loss,
+            k_codebook=k_codebook,
         )
         self.add_codebooks()
         self.forward = self.model.forward
@@ -892,6 +910,7 @@ class GPT2CodebookModel(CodebookModel):
         similarity_metric="euclidean",
         codebook_at: str = "mlp",
         vqvae_loss: bool = False,
+        k_codebook: int = 1,
     ):
         """Build the codebook based model.
 
@@ -905,6 +924,7 @@ class GPT2CodebookModel(CodebookModel):
             similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
             codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
             vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
+            k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(
             model=model,
@@ -914,6 +934,7 @@ class GPT2CodebookModel(CodebookModel):
             similarity_metric=similarity_metric,
             codebook_at=codebook_at,
             vqvae_loss=vqvae_loss,
+            k_codebook=k_codebook,
         )
         self.add_codebooks()
         self.forward = self.model.forward
@@ -955,6 +976,11 @@ class GPT2CodebookModel(CodebookModel):
         """Returns the class to use for codebook before residual."""
         return PreResidualCodebookGPT2Block
 
+    @property
+    def num_heads(self):
+        """Returns the number of heads in the model."""
+        return self.model.config.n_head
+
 
 class GPTNeoXCodebookModel(CodebookModel):
     """Codebook model for GPT2."""
@@ -968,6 +994,7 @@ class GPTNeoXCodebookModel(CodebookModel):
         similarity_metric="euclidean",
         codebook_at: str = "mlp",
         vqvae_loss: bool = False,
+        k_codebook: int = 1,
     ):
         """Build the codebook based model.
 
@@ -981,6 +1008,7 @@ class GPTNeoXCodebookModel(CodebookModel):
             similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
             codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
             vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
+            k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(
             model=model,
@@ -990,6 +1018,7 @@ class GPTNeoXCodebookModel(CodebookModel):
             similarity_metric=similarity_metric,
             codebook_at=codebook_at,
             vqvae_loss=vqvae_loss,
+            k_codebook=k_codebook,
         )
         self.add_codebooks()
         self.forward = self.model.forward
@@ -1030,6 +1059,11 @@ class GPTNeoXCodebookModel(CodebookModel):
     def pre_residual_codebook_cls(self):
         """Returns the class to use for codebook before residual."""
         return PreResidualCodebookGPTNeoXBlock
+
+    @property
+    def num_heads(self):
+        """Returns the number of heads in the model."""
+        return self.model.config.num_attention_heads
 
 
 def wrap_codebook(model, *args, **kwargs):

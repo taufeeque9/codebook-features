@@ -110,6 +110,7 @@ def main(cfg):
         similarity_metric=cfg.similarity_metric,
         codebook_at=cfg.codebook_at,
         vqvae_loss=cfg.vqvae_loss,
+        k_codebook=cfg.k_codebook,
     )
     if cfg.train_model_params:
         # model.unfreeze_model_params()

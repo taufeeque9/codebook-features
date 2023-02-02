@@ -28,7 +28,7 @@ codebook_size: 1000
 layers_to_snap: all
 similarity_metric: euclidean
 codebook_at: attention
-num_compositional_codebooks: 12
+num_compositional_codebooks: 1
 train_model_params: True
 model_lr_factor: 0.1
 vqvae_loss: False
