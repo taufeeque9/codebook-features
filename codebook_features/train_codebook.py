@@ -25,6 +25,7 @@ shortened_args = {
     "vqvae_loss": "vqvae",
     "train_model_params": "train_mod",
     "model_lr_factor": "mod_lrf",
+    "k_codebook": "k",
 }
 
 

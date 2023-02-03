@@ -32,6 +32,7 @@ num_compositional_codebooks: 1
 train_model_params: True
 model_lr_factor: 0.1
 vqvae_loss: False
+k_codebook: 3
 tag_keys: []
 tags: []
 project: gpt2-codebook

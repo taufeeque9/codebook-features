@@ -54,66 +54,54 @@ class CodebookTrainer(transformers.Trainer):
             logs: log dictionary.
         """
         if isinstance(self.model, models.CodebookModel):
-            metric_key_prefix = ""
-            if any("train_" in k for k in logs.keys()):
-                metric_key_prefix = "train_"
-                logs[metric_key_prefix + "learning_rate"] = self._get_learning_rate()
-            elif any("eval_" in k for k in logs.keys()):
-                metric_key_prefix = "eval_"
-            elif any("test_" in k for k in logs.keys()):
-                metric_key_prefix = "test_"
 
             all_codebooks = self.model.all_codebooks
             overall_dead_code_count, dead_code_count, total_codes = 0, 0, 0
+            max_norm, mean_norm = 0, 0
             for codebook_idx, codebooks in all_codebooks.items():
                 dead_code_count = 0
                 for codebook in codebooks:
                     dead_code_count += codebook.num_codes - codebook.active_codes
                 layer_codes = sum(codebook.num_codes for codebook in codebooks)
                 if layer_codes:
-                    logs[
-                        metric_key_prefix + f"dead_code_fraction_layer{codebook_idx}"
-                    ] = (dead_code_count / layer_codes)
-                    logs[metric_key_prefix + f"mean_norm_layer{codebook_idx}"] = sum(
+                    logs[f"dead_code_fraction/layer{codebook_idx}"] = (
+                        dead_code_count / layer_codes
+                    )
+                    layer_mean_norm = sum(
                         codebook.avg_norm() for codebook in codebooks
                     ) / len(codebooks)
-                    logs[metric_key_prefix + f"max_norm_layer{codebook_idx}"] = max(
-                        codebook.max_norm() for codebook in codebooks
-                    )
+                    layer_max_norm = max(codebook.max_norm() for codebook in codebooks)
+                    logs[f"mean_norm/layer{codebook_idx}"] = layer_mean_norm
+                    logs[f"max_norm/layer{codebook_idx}"] = layer_max_norm
+                    mean_norm += layer_mean_norm
+                    max_norm = max(max_norm, layer_max_norm)
                     # table = wandb.Table(
                     #     data=codebooks[0].most_common_counts(),
                     #     columns=["freq"],
                     # )
                     # logs[
-                    #     metric_key_prefix + f"cb_histogram_layer{codebook_idx}"
+                    #     f"cb_histogram_layer{codebook_idx}"
                     # ] = wandb.plot.histogram(table, "freq", title="Codebook Histogram")
                 overall_dead_code_count += dead_code_count
                 total_codes += layer_codes
 
             if total_codes:
-                logs[metric_key_prefix + "dead_code_fraction"] = (
-                    overall_dead_code_count / total_codes
-                )
+                logs["dead_code_fraction"] = overall_dead_code_count / total_codes
+                logs["mean_norm"] = mean_norm / len(all_codebooks)
+                logs["max_norm"] = max_norm
         super().log(logs)
 
 
 class WandbCallback(transformers.integrations.WandbCallback):
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         if isinstance(model, models.CodebookModel):
-            metric_key_prefix = ""
-            if any("train_" in k for k in logs.keys()):
-                metric_key_prefix = "train_"
-            elif any("eval_" in k for k in logs.keys()):
-                metric_key_prefix = "eval_"
-            elif any("test_" in k for k in logs.keys()):
-                metric_key_prefix = "test_"
             for codebook_idx, codebooks in model.all_codebooks.items():
                 table = wandb.Table(
                     data=codebooks[0].most_common_counts(),
                     columns=["freq"],
                 )
-                logs[
-                    metric_key_prefix + f"cb_histogram_layer{codebook_idx}"
-                ] = wandb.plot.histogram(table, "freq", title="Codebook Histogram")
+                logs[f"cb_histogram_layer{codebook_idx}"] = wandb.plot.histogram(
+                    table, "freq", title="Codebook Histogram"
+                )
             model.reset_codebook_counts()
         super().on_log(args, state, control, model, logs, **kwargs)
