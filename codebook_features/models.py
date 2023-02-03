@@ -178,7 +178,7 @@ class EuclideanSnapFunction(BaseSnapFunction):
 
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
-        logits = -torch.cdist(inputs, codebook, p=2) # logits are negative distances
+        logits = -torch.cdist(inputs, codebook, p=2)  # logits are negative distances
         codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)[1]
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
@@ -735,7 +735,7 @@ class CodebookModel(nn.Module, abc.ABC):
         for i in range(len(layers)):
             if i in self.layers_to_snap:
                 codebooks_in_layer = []
-                if self.codebook_at == "transformer_block":
+                if "transformer_block" in self.codebook_at:
                     layers[i] = TransformerLayerWrapper(
                         layers[i],
                         dim=self.model.config.hidden_size,
@@ -755,6 +755,7 @@ class CodebookModel(nn.Module, abc.ABC):
                         snap_fn=self.snap_fn,
                         num_codebooks=self.num_codebooks,
                     )
+                    layers[i].__setattr__(self.mlp_key, wrapped_mlp)
                     self.codebook_params += list(
                         wrapped_mlp.codebook_layer.codebook.parameters(),
                     )
