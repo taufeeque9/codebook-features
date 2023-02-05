@@ -105,3 +105,24 @@ class WandbCallback(transformers.integrations.WandbCallback):
                 )
             model.reset_codebook_counts()
         super().on_log(args, state, control, model, logs, **kwargs)
+
+
+class MultiOptimizer(torch.optim.Optimizer):
+    def __init__(self, optimizers):
+        self.optimizers = optimizers
+
+    def step(self, closure=None):
+        for optimizer in self.optimizers:
+            optimizer.step(closure)
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        for optimizer in self.optimizers:
+            optimizer.__setstate__(state)
+
+    @property
+    def param_groups(self):
+        param_grps = []
+        for optimizer in self.optimizers:
+            param_grps.extend(optimizer.param_groups)
+        return param_grps
