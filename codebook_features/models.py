@@ -192,6 +192,49 @@ class EuclideanSnapFunction(BaseSnapFunction):
         return outputs.detach().clone(), codebook_ids
 
 
+class CompostionalEuclideanSnapFunction(BaseSnapFunction):
+    @staticmethod
+    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor):
+        """Compute output of the snap function with the minimum euclidean
+        distance as the similarity metric.
+
+        Replaces each dimension vector of input with features from codebook
+        having highest dot-product.
+
+        Args:
+        ----
+            ctx: torch context used for efficiently storing tensors for backward pass.
+            inputs: input data.
+            codebook: codebook matrix. Shape: (num_features, hidden_dim_size).
+
+        Returns: tuple of output of snap function and the IDs of closest codebook features.
+        """
+        comp_input = inputs.reshape(
+            inputs.shape[0], inputs.shape[1], codebook.shape[0], -1
+        ).permute(0, 2, 1, 3)
+        logits = -torch.cdist(comp_input, codebook, p=2).permute(
+            0, 2, 1, 3
+        )  # logits are negative distances
+        # logits has shape (bs, seq_len, #ccb, cb_size)
+        codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)[1]
+        # enable gradient so that outputs.grad_fn can be used in backward pass.
+        with torch.enable_grad():
+            outputs = torch.concat(
+                [
+                    torch.nn.functional.embedding(codebook_ids[:, :, i, :], codebook[i])
+                    for i in range(codebook.shape[0])
+                ],
+                dim=-1,
+            )
+            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+        # ctx.save_for_backward(codebook, outputs)
+        ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
+        # detach & clone outputs since the returned tensor's grad_fn will be
+        # overridden by SnapFunction.backward and we don't want the above
+        # outputs.grad_fn to be overridden.
+        return outputs.detach().clone(), codebook_ids
+
+
 class CodebookLayer(nn.Module):
     """Codebook layer module."""
 
@@ -311,6 +354,103 @@ class CodebookLayer(nn.Module):
 
 
 class CompositionalCodebookLayer(nn.Module):
+    """Module that applies distinct codebooks to chunks of input vectors."""
+
+    def __init__(
+        self,
+        dim: int,
+        num_codes: int,
+        kmeans_init=False,
+        soft_snap: bool = False,
+        snap_fn: BaseSnapFunction = CompostionalEuclideanSnapFunction,
+        num_codebooks: int = 1,
+        device=None,
+        dtype=None,
+    ):
+        """Create the compositional codebook layer.
+
+        Args:
+        ----
+            dim: dimension size of the codebook features.
+            num_codes: number of codebook features to have.
+            kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
+            soft_snap: whether to snap the input using softmax. Defaults to False.
+            snap_fn: snap function to use.
+                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+        """
+        super().__init__()
+        if dim % num_codebooks != 0:
+            raise ValueError(
+                "dim must be divisible by num_codebooks. Got dim: {}, num_codebooks: {}".format(
+                    dim, num_codebooks
+                )
+            )
+        self.num_codebooks = num_codebooks
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.codebook = nn.Parameter(
+            torch.empty(
+                (num_codebooks, num_codes, dim // num_codebooks), **factory_kwargs
+            )
+        )
+        self.snap_fn = snap_fn
+        self.counts = [Counter() for _ in range(num_codebooks)]
+
+    def reset_parameters(self) -> None:
+        """Reset the parameters of the codebooks."""
+        nn.init.normal_(self.codebook)
+
+    @property
+    def active_codes(self):
+        """Return the number of active codes in all the codebooks."""
+        return sum(len(counter) for counter in self.counts)
+
+    @property
+    def num_codes(self):
+        """Return the total number of codes in all the codebooks."""
+        return self.num_codebooks * self.codebook.size(1)
+
+    def forward(self, x):
+        """Snaps activations to elements in the codebook.
+
+        Args:
+        ----
+            x: input tensor of shape: (batch_size, seq_len, dim).
+
+        Returns: output with the feature vectors replaced using the compositional codebook.
+        """
+        assert len(x.shape) == 3
+        output, codebook_ids = self.snap_fn.apply(x, self.codebook)
+        codebook_ids = codebook_ids.cpu().numpy()
+        for i, counter in enumerate(self.counts):
+            counter.update(codebook_ids[:, :, i, :].flat)
+        return output
+
+    def reset_counts(self):
+        """Reset the counts of the codebook features."""
+        for counter in self.counts:
+            counter.clear()
+
+    def avg_norm(self):
+        """Return the average norm of the codebook features."""
+        return self.codebook.norm(p=2, dim=2).mean().item()
+
+    def max_norm(self):
+        """Return the average norm of the codebook features."""
+        return self.codebook.norm(p=2, dim=2).max().item()
+
+    def most_common_counts(self):
+        """Return the counts of the codebook features."""
+        raise NotImplementedError("TODO: Implement this")
+        counts = np.zeros((self.num_codes // self.num_codebooks, 1))
+        for i, counter in enumerate(self.counts):
+            counts[list(self.counts.keys())] = np.array(
+                list(self.counts.values())
+            ).reshape(-1, 1)
+        return counts
+
+
+class CompositionalCodebookLayer2(nn.Module):
     """Module that applies distinct codebooks to chunks of input vectors."""
 
     def __init__(
@@ -743,7 +883,10 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         BaseSnapFunction.vqvae_loss = self.config.vqvae_loss
         BaseSnapFunction.k = self.config.k_codebook
         if self.config.similarity_metric == "euclidean":
-            self.snap_fn = EuclideanSnapFunction
+            if self.config.num_codebooks > 1:
+                self.snap_fn = CompostionalEuclideanSnapFunction
+            else:
+                self.snap_fn = EuclideanSnapFunction
         elif self.config.similarity_metric == "inner_product":
             self.snap_fn = InnerProductSnapFunction
         else:
@@ -809,7 +952,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                         )
                     )
                     self.codebook_params += list(
-                        codebooks_in_layer[-1].codebook.parameters(),
+                        codebooks_in_layer[-1].parameters(),
                     )
                     layers[i] = self.pre_residual_codebook_cls(
                         self.model.config,

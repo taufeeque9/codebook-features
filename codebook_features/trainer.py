@@ -6,7 +6,6 @@ import torch
 import transformers
 from torch import nn
 
-import wandb
 from codebook_features import models
 
 
@@ -95,14 +94,14 @@ class CodebookTrainer(transformers.Trainer):
 class WandbCallback(transformers.integrations.WandbCallback):
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         if isinstance(model, models.CodebookModel):
-            for codebook_idx, codebooks in model.all_codebooks.items():
-                table = wandb.Table(
-                    data=codebooks[0].most_common_counts(),
-                    columns=["freq"],
-                )
-                logs[f"cb_histogram_layer{codebook_idx}"] = wandb.plot.histogram(
-                    table, "freq", title="Codebook Histogram"
-                )
+            # for codebook_idx, codebooks in model.all_codebooks.items():
+            #     table = wandb.Table(
+            #         data=codebooks[0].most_common_counts(),
+            #         columns=["freq"],
+            #     )
+            #     logs[f"cb_histogram_layer{codebook_idx}"] = wandb.plot.histogram(
+            #         table, "freq", title="Codebook Histogram"
+            #     )
             model.reset_codebook_counts()
         super().on_log(args, state, control, model, logs, **kwargs)
 
