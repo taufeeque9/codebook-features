@@ -668,19 +668,41 @@ class PreResidualCodebookGPTNeoXBlock(
         return outputs
 
 
-class CodebookModel(nn.Module, abc.ABC):
-    """ABC for a model containing codebook features."""
+class CodebookModelConfig(transformers.PretrainedConfig):
+    model_type = "codebook"
 
     def __init__(
         self,
-        model: nn.Module,
-        num_codes: int,
+        num_codes: int = 100,
         num_codebooks: int = 1,
         layers_to_snap: Sequence = (),
         similarity_metric: str = "euclidean",
         codebook_at: str = "mlp",
         vqvae_loss: bool = False,
         k_codebook: int = 1,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.num_codes = num_codes
+        self.num_codebooks = num_codebooks
+        self.layers_to_snap = layers_to_snap
+        self.similarity_metric = similarity_metric
+        self.codebook_at = codebook_at
+        if isinstance(codebook_at, str):
+            self.codebook_at = codebook_at.lower().split(",")
+        self.vqvae_loss = vqvae_loss
+        self.k_codebook = k_codebook
+
+
+class CodebookModel(transformers.PreTrainedModel, abc.ABC):
+    """ABC for a model containing codebook features."""
+
+    config_class = CodebookModelConfig
+
+    def __init__(
+        self,
+        config: CodebookModelConfig,
+        model: nn.Module,
     ) -> None:
         """Build the codebook based model.
 
@@ -696,37 +718,38 @@ class CodebookModel(nn.Module, abc.ABC):
             vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
             k_codebook: number of nearest neighbors in codebook snapping.
         """
-        super().__init__()
+        super().__init__(config=config)
         self.model = model
         self.model_params = list(model.parameters())
-        self.num_codes = num_codes
-        if num_codebooks == -1:
-            num_codebooks = self.model.num_heads
-        self.num_codebooks = num_codebooks
+
+        if self.config.num_codebooks == -1:
+            self.config.num_codebooks = self.model.num_heads
         num_layers = self.num_layers()
-        if type(layers_to_snap) is str and layers_to_snap == "all":
-            self.layers_to_snap = list(range(num_layers))
+        if (
+            type(self.config.layers_to_snap) is str
+            and self.config.layers_to_snap == "all"
+        ):
+            self.config.layers_to_snap = list(range(num_layers))
         else:
-            self.layers_to_snap = list(layers_to_snap)
-            for i in range(len(self.layers_to_snap)):
+            self.config.layers_to_snap = list(self.config.layers_to_snap)
+            for i in range(len(self.config.layers_to_snap)):
                 assert -num_layers <= i and i < num_layers
-                if self.layers_to_snap[i] < 0:
-                    self.layers_to_snap[i] += num_layers
-        self.layers_to_snap = sorted(self.layers_to_snap)
+                if self.config.layers_to_snap[i] < 0:
+                    self.config.layers_to_snap[i] += num_layers
+        self.config.layers_to_snap = sorted(self.config.layers_to_snap)
         self.codebook_params = []
         self.all_codebooks = {}
         # self.freeze_model_params()
-        if similarity_metric == "euclidean":
+        BaseSnapFunction.vqvae_loss = self.config.vqvae_loss
+        BaseSnapFunction.k = self.config.k_codebook
+        if self.config.similarity_metric == "euclidean":
             self.snap_fn = EuclideanSnapFunction
-        elif similarity_metric == "inner_product":
+        elif self.config.similarity_metric == "inner_product":
             self.snap_fn = InnerProductSnapFunction
         else:
             raise ValueError(
                 "`similarity_metric` should be either 'euclidean' or 'inner_product'."
             )
-        BaseSnapFunction.vqvae_loss = vqvae_loss
-        BaseSnapFunction.k = k_codebook
-        self.codebook_at = codebook_at.lower().split(",")
 
     @property
     def device(self):
@@ -736,53 +759,53 @@ class CodebookModel(nn.Module, abc.ABC):
         """Adds codebooks for the layers that are to be snapped."""
         layers = self.layers()
         for i in range(len(layers)):
-            if i in self.layers_to_snap:
+            if i in self.config.layers_to_snap:
                 codebooks_in_layer = []
-                if "transformer_block" in self.codebook_at:
+                if "transformer_block" in self.config.codebook_at:
                     layers[i] = TransformerLayerWrapper(
                         layers[i],
                         dim=self.model.config.hidden_size,
-                        num_codes=self.num_codes,
+                        num_codes=self.config.num_codes,
                         snap_fn=self.snap_fn,
-                        num_codebooks=self.num_codebooks,
+                        num_codebooks=self.config.num_codebooks,
                     )
                     self.codebook_params += list(
                         layers[i].codebook_layer.codebook.parameters(),
                     )
                     codebooks_in_layer.append(layers[i].codebook_layer)
-                if "mlp" in self.codebook_at:
+                if "mlp" in self.config.codebook_at:
                     wrapped_mlp = MLPWrapper(
                         layers[i].__getattr__(self.mlp_key),
                         dim=self.model.config.hidden_size,
-                        num_codes=self.num_codes,
+                        num_codes=self.config.num_codes,
                         snap_fn=self.snap_fn,
-                        num_codebooks=self.num_codebooks,
+                        num_codebooks=self.config.num_codebooks,
                     )
                     layers[i].__setattr__(self.mlp_key, wrapped_mlp)
                     self.codebook_params += list(
                         wrapped_mlp.codebook_layer.codebook.parameters(),
                     )
                     codebooks_in_layer.append(wrapped_mlp.codebook_layer)
-                if "attention" in self.codebook_at:
+                if "attention" in self.config.codebook_at:
                     wrapped_attn = TransformerLayerWrapper(
                         layers[i].__getattr__(self.attention_key),
                         dim=self.model.config.hidden_size,
-                        num_codes=self.num_codes,
+                        num_codes=self.config.num_codes,
                         snap_fn=self.snap_fn,
-                        num_codebooks=self.num_codebooks,
+                        num_codebooks=self.config.num_codebooks,
                     )
                     layers[i].__setattr__(self.attention_key, wrapped_attn)
                     self.codebook_params += list(
                         wrapped_attn.codebook_layer.codebook.parameters(),
                     )
                     codebooks_in_layer.append(wrapped_attn.codebook_layer)
-                if "attention_and_mlp" in self.codebook_at:
+                if "attention_and_mlp" in self.config.codebook_at:
                     codebooks_in_layer.append(
                         CompositionalCodebookLayer(
                             dim=self.model.config.hidden_size,
-                            num_codes=self.num_codes,
+                            num_codes=self.config.num_codes,
                             snap_fn=self.snap_fn,
-                            num_codebooks=self.num_codebooks,
+                            num_codebooks=self.config.num_codebooks,
                         )
                     )
                     self.codebook_params += list(
@@ -798,21 +821,21 @@ class CodebookModel(nn.Module, abc.ABC):
     def reset_codebook_counts(self):
         """Resets the counts of the codebooks."""
         for i, layers in self.all_codebooks.items():
-            assert i in self.layers_to_snap
+            assert i in self.config.layers_to_snap
             for layer in layers:
                 layer.reset_counts()
 
     def enable_codebooks(self):
         """Enable the use of codebooks in all the layers to snap."""
         for i, layers in self.all_codebooks.items():
-            assert i in self.layers_to_snap
+            assert i in self.config.layers_to_snap
             for layer in layers:
                 layer.snap = True
 
     def disable_codebooks(self):
         """Disable the use of codebooks in all the layers."""
         for i, layers in enumerate(self.all_codebooks):
-            assert i in self.layers_to_snap
+            assert i in self.config.layers_to_snap
             for layer in layers:
                 layer.snap = False
 
@@ -907,14 +930,8 @@ class GPT2CodebookModel(CodebookModel):
 
     def __init__(
         self,
+        config,
         model,
-        num_codes,
-        num_codebooks: int = 1,
-        layers_to_snap=(),
-        similarity_metric="euclidean",
-        codebook_at: str = "mlp",
-        vqvae_loss: bool = False,
-        k_codebook: int = 1,
     ):
         """Build the codebook based model.
 
@@ -931,14 +948,8 @@ class GPT2CodebookModel(CodebookModel):
             k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(
+            config=config,
             model=model,
-            num_codes=num_codes,
-            num_codebooks=num_codebooks,
-            layers_to_snap=layers_to_snap,
-            similarity_metric=similarity_metric,
-            codebook_at=codebook_at,
-            vqvae_loss=vqvae_loss,
-            k_codebook=k_codebook,
         )
         self.add_codebooks()
         self.forward = self.model.forward
@@ -992,13 +1003,7 @@ class GPTNeoXCodebookModel(CodebookModel):
     def __init__(
         self,
         model,
-        num_codes,
-        num_codebooks: int = 1,
-        layers_to_snap=(),
-        similarity_metric="euclidean",
-        codebook_at: str = "mlp",
-        vqvae_loss: bool = False,
-        k_codebook: int = 1,
+        config,
     ):
         """Build the codebook based model.
 
@@ -1016,13 +1021,7 @@ class GPTNeoXCodebookModel(CodebookModel):
         """
         super().__init__(
             model=model,
-            num_codes=num_codes,
-            num_codebooks=num_codebooks,
-            layers_to_snap=layers_to_snap,
-            similarity_metric=similarity_metric,
-            codebook_at=codebook_at,
-            vqvae_loss=vqvae_loss,
-            k_codebook=k_codebook,
+            config=config,
         )
         self.add_codebooks()
         self.forward = self.model.forward
@@ -1070,13 +1069,28 @@ class GPTNeoXCodebookModel(CodebookModel):
         return self.model.config.num_attention_heads
 
 
-def wrap_codebook(model, *args, **kwargs):
+def wrap_codebook(model, config=None, pretrained_path=None):
+    """Wraps a model with codebooks."""
+    if pretrained_path is not None:
+        if model.config.model_type == "gpt2":
+            return GPT2CodebookModel.from_pretrained(pretrained_path, model)
+        elif model.config.model_type == "gpt_neox":
+            return GPTNeoXCodebookModel.from_pretrained(pretrained_path, model)
+        elif model.config.model_type == "bert":
+            return BertCodebookModel.from_pretrained(pretrained_path, model)
+        else:
+            raise ValueError(
+                f"Model type {model.config.model_type} not supported with codebooks."
+            )
+    if config is None:
+        RuntimeWarning("No config provided. Using default config.")
+        config = CodebookModelConfig()
     if model.config.model_type == "gpt2":
-        return GPT2CodebookModel(model, *args, **kwargs)
+        return GPT2CodebookModel(config, model)
     elif model.config.model_type == "gpt_neox":
-        return GPTNeoXCodebookModel(model, *args, **kwargs)
+        return GPTNeoXCodebookModel(config, model)
     elif model.config.model_type == "bert":
-        return BertCodebookModel(model, *args, **kwargs)
+        return BertCodebookModel(config, model)
     else:
         raise ValueError(
             f"Model type {model.config.model_type} not supported with codebooks."

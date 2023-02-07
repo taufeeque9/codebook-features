@@ -13,21 +13,24 @@ training_args:
   do_train: True
   do_eval: True
   max_steps: 4
+  save_steps: 2
   per_device_train_batch_size: 2
   per_device_eval_batch_size: 2
   eval_steps: 1
   logging_steps: 1
   # report_to: wandb
 
+pretrained_path: null
 get_baseline: False
 codebook_size: 100
-layers_to_snap: [0,1]
+layers_to_snap: all
 similarity_metric: euclidean
 codebook_at: attention_and_mlp
-num_compositional_codebooks: 2
-train_model_params: False
+num_compositional_codebooks: 1
+train_model_params: True
 model_lr_factor: 0.1
-vqvae_loss: True
+vqvae_loss: False
+k_codebook: 3
 tag_keys: ["codebook_at", "per_device_train_batch_size", "model_name_or_path"]
 tags: ["test", "TGPT"]
 project: gpt2-codebook

@@ -103,8 +103,7 @@ def main(cfg):
             baseline_metrics = {}
     if training_args.local_rank == 0:
         wandb.log(baseline_metrics, commit=False)
-    model = models.wrap_codebook(
-        model=model,
+    codebook_config = models.CodebookModelConfig(
         num_codes=cfg.codebook_size,
         num_codebooks=cfg.num_compositional_codebooks,
         layers_to_snap=cfg.layers_to_snap,
@@ -112,6 +111,11 @@ def main(cfg):
         codebook_at=cfg.codebook_at,
         vqvae_loss=cfg.vqvae_loss,
         k_codebook=cfg.k_codebook,
+    )
+    model = models.wrap_codebook(
+        model=model,
+        config=codebook_config,
+        pretrained_path=cfg.pretrained_path,
     )
     if cfg.train_model_params:
         # model.unfreeze_model_params()

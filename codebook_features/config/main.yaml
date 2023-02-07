@@ -23,6 +23,7 @@ training_args:
   save_steps: 10000
   ddp_find_unused_parameters: False
 
+pretrained_path: null
 get_baseline: False
 codebook_size: 1000
 layers_to_snap: all
