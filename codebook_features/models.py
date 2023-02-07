@@ -1002,8 +1002,8 @@ class GPTNeoXCodebookModel(CodebookModel):
 
     def __init__(
         self,
-        model,
         config,
+        model,
     ):
         """Build the codebook based model.
 
@@ -1020,8 +1020,8 @@ class GPTNeoXCodebookModel(CodebookModel):
             k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(
-            model=model,
             config=config,
+            model=model,
         )
         self.add_codebooks()
         self.forward = self.model.forward
