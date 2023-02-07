@@ -116,24 +116,25 @@ def main(cfg):
     if cfg.train_model_params:
         # model.unfreeze_model_params()
         # params = list(model.parameters())
-        opt1 = torch.optim.AdamW(
-            model.get_model_params(),
-            lr=cfg.model_lr_factor * training_args.learning_rate,
-        )
-        opt2 = torch.optim.SGD(
-            model.get_codebook_params(),
-            lr=training_args.learning_rate,
-            weight_decay=training_args.weight_decay,
-        )
-        optimizer = trainer.MultiOptimizer([opt1, opt2])
+        params = [
+            {"params": model.get_codebook_params(), "lr": training_args.learning_rate},
+            {
+                "params": model.get_model_params(),
+                "lr": cfg.model_lr_factor * training_args.learning_rate,
+            },
+        ]
     else:
         # model.freeze_model_params()
         params = model.get_codebook_params()
+    if len(params) > 0:
         optimizer = torch.optim.AdamW(
             params,
             training_args.learning_rate,
             weight_decay=training_args.weight_decay,
         )
+    else:
+        RuntimeWarning("Codebook not found in model. Training with model params.")
+        optimizer = None
 
     metrics = run_clm.main(
         model_args,

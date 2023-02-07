@@ -633,9 +633,8 @@ class PreResidualCodebookGPTNeoXBlock(
             use_cache=use_cache,
             output_attentions=output_attentions,
         )
-        attn_output = attention_layer_outputs[
-            0
-        ]  # output_attn: attn_output, present, (attn_weights)
+        # output_attn: attn_output, present, (attn_weights)
+        attn_output = attention_layer_outputs[0]
         outputs = attention_layer_outputs[1:]
 
         if self.use_parallel_residual:
@@ -647,13 +646,17 @@ class PreResidualCodebookGPTNeoXBlock(
                 main_stream = self.codebook_layer(main_stream)
             hidden_states = main_stream + hidden_states
         else:
-            raise NotImplementedError("Not implemented")
             # pseudocode:
             # x = x + attn(ln1(x))
             # x = x + mlp(ln2(x))
-            attn_output = attn_output + hidden_states
-            mlp_output = self.mlp(self.post_attention_layernorm(attn_output))
-            hidden_states = mlp_output + attn_output
+            # attn_output = attn_output + hidden_states
+            mlp_output = self.mlp(
+                self.post_attention_layernorm(attn_output + hidden_states)
+            )
+            main_stream = mlp_output + attn_output
+            if self.codebook_layer and self.snap:
+                main_stream = self.codebook_layer(main_stream)
+            hidden_states = main_stream + hidden_states
 
         if use_cache:
             outputs = (
