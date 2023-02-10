@@ -45,6 +45,7 @@ def test_composition_codebook_layer(codebook_cls, num_codebooks):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     layer = codebook_cls(dim=768, num_codes=1000, num_codebooks=num_codebooks)
     layer.to(device)
-    input = torch.randn(16, 128, 768, device=device)
-    output = layer(input)
-    assert output.shape == input.shape
+    for _ in range(1000):
+        input = torch.randn(32, 128, 768, device=device)
+        output = layer(input)
+        assert output.shape == input.shape
