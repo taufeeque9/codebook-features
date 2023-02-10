@@ -2,7 +2,7 @@
 
 import abc
 from collections import Counter
-from typing import Any, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -242,9 +242,11 @@ class CodebookLayer(nn.Module):
         self,
         dim: int,
         num_codes: int,
+        key: str,
         kmeans_init=False,
         soft_snap: bool = False,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+        hook_fn: Callable = None,
     ):
         """Create the codebook layer.
 
@@ -266,6 +268,10 @@ class CodebookLayer(nn.Module):
         self.counts = Counter()
         self.soft_snap = soft_snap
         self.snap_fn = snap_fn
+        self.hook_fn = hook_fn
+        self.key = key
+        self.reconstruction_mse = 0
+        self.tokens_processed = 0
 
     @property
     def active_codes(self):
@@ -291,7 +297,17 @@ class CodebookLayer(nn.Module):
         if not self.soft_snap:
             # Hard choice of a single codebook vector
             output, codebook_ids = self.snap_fn.apply(x, self.codebook.weight)
+            # update metrics
             self.counts.update(codebook_ids.cpu().numpy().flat)
+            coeff = x.shape[0] * x.shape[1]
+            coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
+
+            mse_batch = torch.mean(torch.sum(((x - output) ** 2), dim=-1)).item()
+            self.reconstruction_mse += coeff * (mse_batch - self.reconstruction_mse)
+            self.tokens_processed += x.shape[0] * x.shape[1]
+
+            if self.hook_fn is not None:
+                self.hook_fn(self.key, codebook_ids)
         else:
             # NOTE: was previously doing a gumbel softmax,
             # but found this was not necessary
@@ -307,9 +323,11 @@ class CodebookLayer(nn.Module):
             output = output.sum(-2)  # codebook size
         return output
 
-    def reset_counts(self):
+    def reset_metrics(self):
         """Reset the counts of the codebook features."""
         self.counts.clear()
+        self.reconstruction_mse = 0
+        self.tokens_processed = 0
 
     def avg_norm(self):
         """Return the average norm of the codebook features."""
@@ -353,17 +371,19 @@ class CodebookLayer(nn.Module):
         return counts
 
 
-class CompositionalCodebookLayer(nn.Module):
+class CompositionalCodebookLayer2(nn.Module):
     """Module that applies distinct codebooks to chunks of input vectors."""
 
     def __init__(
         self,
         dim: int,
         num_codes: int,
+        key: str,
         kmeans_init=False,
         soft_snap: bool = False,
         snap_fn: BaseSnapFunction = CompostionalEuclideanSnapFunction,
         num_codebooks: int = 1,
+        hook_fn: Callable = None,
         device=None,
         dtype=None,
     ):
@@ -395,6 +415,8 @@ class CompositionalCodebookLayer(nn.Module):
         )
         self.snap_fn = snap_fn
         self.counts = [Counter() for _ in range(num_codebooks)]
+        self.key = key
+        self.hook_fn = hook_fn
 
     def reset_parameters(self) -> None:
         """Reset the parameters of the codebooks."""
@@ -424,6 +446,8 @@ class CompositionalCodebookLayer(nn.Module):
         codebook_ids = codebook_ids.cpu().numpy()
         for i, counter in enumerate(self.counts):
             counter.update(codebook_ids[:, :, i, :].flat)
+        if self.hook_fn is not None:
+            self.hook_fn(self.key, codebook_ids)
         return output
 
     def reset_counts(self):
@@ -450,17 +474,19 @@ class CompositionalCodebookLayer(nn.Module):
         return counts
 
 
-class CompositionalCodebookLayer2(nn.Module):
+class CompositionalCodebookLayer(nn.Module):
     """Module that applies distinct codebooks to chunks of input vectors."""
 
     def __init__(
         self,
         dim: int,
         num_codes: int,
+        key: str,
         kmeans_init=False,
         soft_snap: bool = False,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
+        hook_fn: Callable = None,
     ):
         """Create the compositional codebook layer.
 
@@ -487,11 +513,13 @@ class CompositionalCodebookLayer2(nn.Module):
                 CodebookLayer(
                     dim // num_codebooks,
                     num_codes,
+                    key=key + f"_ccb{i}",
                     kmeans_init=kmeans_init,
                     soft_snap=soft_snap,
                     snap_fn=snap_fn,
+                    hook_fn=hook_fn,
                 )
-                for _ in range(num_codebooks)
+                for i in range(num_codebooks)
             ]
         )
 
@@ -504,6 +532,13 @@ class CompositionalCodebookLayer2(nn.Module):
     def num_codes(self):
         """Return the total number of codes in all the codebooks."""
         return sum(codebook.num_codes for codebook in self.codebook)
+
+    @property
+    def reconstruction_mse(self):
+        """Return the reconstruction mse of the codebooks."""
+        return sum(codebook.reconstruction_mse for codebook in self.codebook) / len(
+            self.codebook
+        )
 
     def forward(self, x):
         """Snaps activations to elements in the codebook.
@@ -524,10 +559,10 @@ class CompositionalCodebookLayer2(nn.Module):
         )
         return output
 
-    def reset_counts(self):
-        """Reset the counts of the codebook features."""
+    def reset_metrics(self):
+        """Reset the metrics stored in the codebooks."""
         for codebook in self.codebook:
-            codebook.reset_counts()
+            codebook.reset_metrics()
 
     def avg_norm(self):
         """Return the average norm of the codebook features."""
@@ -555,8 +590,10 @@ class CodebookWrapper(nn.Module, abc.ABC):
         module_layer: nn.Module,
         dim: int,
         num_codes: int,
+        key: str,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
+        hook_fn: Callable = None,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -572,7 +609,12 @@ class CodebookWrapper(nn.Module, abc.ABC):
         super().__init__()
         self.module_layer = module_layer
         self.codebook_layer = CompositionalCodebookLayer(
-            dim, num_codes, snap_fn=snap_fn, num_codebooks=num_codebooks
+            dim,
+            num_codes,
+            key=key,
+            snap_fn=snap_fn,
+            num_codebooks=num_codebooks,
+            hook_fn=hook_fn,
         )
         self.snap = True
 
@@ -589,8 +631,10 @@ class TransformerLayerWrapper(CodebookWrapper):
         module_layer: nn.Module,
         dim: int,
         num_codes: int,
+        key: str,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
+        hook_fn: Callable = None,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -607,8 +651,10 @@ class TransformerLayerWrapper(CodebookWrapper):
             module_layer=module_layer,
             dim=dim,
             num_codes=num_codes,
+            key=key,
             snap_fn=snap_fn,
             num_codebooks=num_codebooks,
+            hook_fn=hook_fn,
         )
 
     def forward(self, *args, **kwargs):
@@ -633,8 +679,10 @@ class MLPWrapper(CodebookWrapper):
         module_layer: nn.Module,
         dim: int,
         num_codes: int,
+        key: str,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
+        hook_fn: Callable = None,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -651,8 +699,10 @@ class MLPWrapper(CodebookWrapper):
             module_layer=module_layer,
             dim=dim,
             num_codes=num_codes,
+            key=key,
             snap_fn=snap_fn,
             num_codebooks=num_codebooks,
+            hook_fn=hook_fn,
         )
 
     def forward(self, *args, **kwargs):
@@ -883,10 +933,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         BaseSnapFunction.vqvae_loss = self.config.vqvae_loss
         BaseSnapFunction.k = self.config.k_codebook
         if self.config.similarity_metric == "euclidean":
-            if self.config.num_codebooks > 1:
-                self.snap_fn = CompostionalEuclideanSnapFunction
-            else:
-                self.snap_fn = EuclideanSnapFunction
+            self.snap_fn = EuclideanSnapFunction
         elif self.config.similarity_metric == "inner_product":
             self.snap_fn = InnerProductSnapFunction
         else:
@@ -909,6 +956,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                         layers[i],
                         dim=self.model.config.hidden_size,
                         num_codes=self.config.num_codes,
+                        key=f"layer{i}_tb",
                         snap_fn=self.snap_fn,
                         num_codebooks=self.config.num_codebooks,
                     )
@@ -921,6 +969,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                         layers[i].__getattr__(self.mlp_key),
                         dim=self.model.config.hidden_size,
                         num_codes=self.config.num_codes,
+                        key=f"layer{i}_mlp",
                         snap_fn=self.snap_fn,
                         num_codebooks=self.config.num_codebooks,
                     )
@@ -934,6 +983,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                         layers[i].__getattr__(self.attention_key),
                         dim=self.model.config.hidden_size,
                         num_codes=self.config.num_codes,
+                        key=f"layer{i}_attn",
                         snap_fn=self.snap_fn,
                         num_codebooks=self.config.num_codebooks,
                     )
@@ -947,6 +997,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                         CompositionalCodebookLayer(
                             dim=self.model.config.hidden_size,
                             num_codes=self.config.num_codes,
+                            key=f"layer{i}_attn+mlp",
                             snap_fn=self.snap_fn,
                             num_codebooks=self.config.num_codebooks,
                         )
@@ -961,12 +1012,12 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                     )
                 self.all_codebooks[i] = codebooks_in_layer
 
-    def reset_codebook_counts(self):
-        """Resets the counts of the codebooks."""
+    def reset_codebook_metrics(self):
+        """Resets the metrics stored of the codebooks."""
         for i, layers in self.all_codebooks.items():
             assert i in self.config.layers_to_snap
             for layer in layers:
-                layer.reset_counts()
+                layer.reset_metrics()
 
     def enable_codebooks(self):
         """Enable the use of codebooks in all the layers to snap."""
@@ -989,6 +1040,13 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def get_model_params(self):
         """Gets model's original parameters (not including codebook params)."""
         return self.model_params
+
+    def set_hook_fn(self, hook_fn: Callable):
+        """Sets the hook function to be called after every forward pass of every codebook layer."""
+        for i, layers in enumerate(self.all_codebooks):
+            assert i in self.config.layers_to_snap
+            for layer in layers:
+                layer.hook_fn = hook_fn
 
     # def freeze_model_params(self):
     #     """Freezes model's actual parameters."""
@@ -1212,8 +1270,16 @@ class GPTNeoXCodebookModel(CodebookModel):
         return self.model.config.num_attention_heads
 
 
-def wrap_codebook(model, config=None, pretrained_path=None):
+def wrap_codebook(model_or_path, config=None, pretrained_path=None):
     """Wraps a model with codebooks."""
+    if isinstance(model_or_path, str):
+        model = transformers.AutoModelForCausalLM.from_pretrained(model_or_path)
+    elif isinstance(model_or_path, transformers.PreTrainedModel):
+        model = model_or_path
+    else:
+        raise ValueError(
+            "`model_or_path` should be either a string or a PreTrainedModel."
+        )
     if pretrained_path is not None:
         if model.config.model_type == "gpt2":
             return GPT2CodebookModel.from_pretrained(pretrained_path, model)

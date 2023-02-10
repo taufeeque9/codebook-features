@@ -113,7 +113,7 @@ def main(cfg):
         k_codebook=cfg.k_codebook,
     )
     model = models.wrap_codebook(
-        model=model,
+        model_or_path=model,
         config=codebook_config,
         pretrained_path=cfg.pretrained_path,
     )
