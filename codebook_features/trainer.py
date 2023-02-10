@@ -66,6 +66,9 @@ class CodebookTrainer(transformers.Trainer):
                     logs[f"dead_code_fraction/layer{codebook_idx}"] = (
                         dead_code_count / layer_codes
                     )
+                    logs[f"MSE/layer{codebook_idx}"] = sum(
+                        codebook.reconstruction_mse for codebook in codebooks
+                    ) / len(codebooks)
                     layer_mean_norm = sum(
                         codebook.avg_norm() for codebook in codebooks
                     ) / len(codebooks)
@@ -86,6 +89,9 @@ class CodebookTrainer(transformers.Trainer):
 
             if total_codes:
                 logs["dead_code_fraction"] = overall_dead_code_count / total_codes
+                logs["MSE"] = sum(
+                    logs[f"MSE/layer{codebook_idx}"] for codebook_idx in all_codebooks
+                ) / len(all_codebooks)
                 logs["mean_norm"] = mean_norm / len(all_codebooks)
                 logs["max_norm"] = max_norm
         super().log(logs)
@@ -102,7 +108,7 @@ class WandbCallback(transformers.integrations.WandbCallback):
             #     logs[f"cb_histogram_layer{codebook_idx}"] = wandb.plot.histogram(
             #         table, "freq", title="Codebook Histogram"
             #     )
-            model.reset_codebook_counts()
+            model.reset_codebook_metrics()
         super().on_log(args, state, control, model, logs, **kwargs)
 
 

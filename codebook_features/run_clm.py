@@ -32,16 +32,22 @@ import os
 import sys
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Optional
+from typing import Optional, Tuple
 
 import datasets
 import evaluate
 import transformers
 from datasets import load_dataset
 from transformers import (  # HfArgumentParser,; TrainingArguments,
-    CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig,
-    AutoModelForCausalLM, AutoTokenizer, default_data_collator,
-    is_torch_tpu_available, set_seed)
+    CONFIG_MAPPING,
+    MODEL_FOR_CAUSAL_LM_MAPPING,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    default_data_collator,
+    is_torch_tpu_available,
+    set_seed,
+)
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
@@ -246,15 +252,15 @@ class DataTrainingArguments:
                 ], "`validation_file` should be a csv, a json or a txt file."
 
 
-def main(
+def get_trainer_and_dataset(
     model_args: ModelArguments,
     data_args: DataTrainingArguments,
     training_args: transformers.TrainingArguments,
     model=None,
     optimizers=(None, None),
     callbacks=None,
-):
-    """Function to train/evaluate CLMs.
+) -> Tuple[transformers.Trainer, datasets.Dataset, datasets.Dataset, bool]:
+    """Function to get a trainer for CLMs.
 
     Args:
         model_args: model arguments.
@@ -263,8 +269,6 @@ def main(
         model: model to train/evaluate. Defaults to None in which case model is loaded using `model_args`.
         optimizers: tuple of model optimizer and learning rate scheduler.
         callbacks: list of callbacks for transformers based training/evaluation. Defaults to None.
-
-    Returns: If evaluating then evaluation metrics of the final model and if not, then train metrics.
     """
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -417,19 +421,22 @@ def main(
         "revision": model_args.model_revision,
         "use_auth_token": True if model_args.use_auth_token else None,
     }
-    if model_args.config_name:
-        config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
-    elif model_args.model_name_or_path:
-        config = AutoConfig.from_pretrained(
-            model_args.model_name_or_path, **config_kwargs
-        )
+    if model is None:
+        if model_args.config_name:
+            config = AutoConfig.from_pretrained(model_args.config_name, **config_kwargs)
+        elif model_args.model_name_or_path:
+            config = AutoConfig.from_pretrained(
+                model_args.model_name_or_path, **config_kwargs
+            )
+        else:
+            config = CONFIG_MAPPING[model_args.model_type]()
+            logger.warning("You are instantiating a new config instance from scratch.")
+            if model_args.config_overrides is not None:
+                logger.info(f"Overriding config: {model_args.config_overrides}")
+                config.update_from_string(model_args.config_overrides)
+                logger.info(f"New config: {config}")
     else:
-        config = CONFIG_MAPPING[model_args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
-        if model_args.config_overrides is not None:
-            logger.info(f"Overriding config: {model_args.config_overrides}")
-            config.update_from_string(model_args.config_overrides)
-            logger.info(f"New config: {config}")
+        config = model.config
 
     tokenizer_kwargs = {
         "cache_dir": model_args.cache_dir,
@@ -639,7 +646,34 @@ def main(
         optimizers=optimizers,
         callbacks=callbacks,
     )
+    return trainer, lm_datasets, last_checkpoint
 
+
+def main(
+    model_args: ModelArguments,
+    data_args: DataTrainingArguments,
+    training_args: transformers.TrainingArguments,
+    model=None,
+    optimizers=(None, None),
+    callbacks=None,
+):
+    """Function to train/evaluate CLMs.
+
+    Args:
+        model_args: model arguments.
+        data_args: data arguments.
+        training_args: training arguments.
+        model: model to train/evaluate. Defaults to None in which case model is loaded using `model_args`.
+        optimizers: tuple of model optimizer and learning rate scheduler.
+        callbacks: list of callbacks for transformers based training/evaluation. Defaults to None.
+
+    Returns: If evaluating then evaluation metrics of the final model and if not, then train metrics.
+    """
+    trainer, lm_datasets, last_checkpoint = get_trainer_and_dataset(
+        model_args, data_args, training_args, model, optimizers, callbacks
+    )
+    train_dataset = lm_datasets["train"]
+    eval_dataset = lm_datasets["validation"]
     metrics = None
 
     # Training
