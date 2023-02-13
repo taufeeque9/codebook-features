@@ -2,6 +2,7 @@
 import dataclasses
 from datetime import datetime
 
+import numpy as np
 import transformers
 
 from codebook_features import run_clm
@@ -18,8 +19,17 @@ def evaluate(model, model_args, data_args, eval_on="train"):
         do_train=False,
         do_eval=True,
         report_to="none",
-        per_device_eval_batch_size=128,
+        per_device_eval_batch_size=32,
     )
+    codebook_acts = {}
+
+    def store_cb_activations(key, codebook_ids, codebook_acts=codebook_acts):
+        assert len(codebook_ids.shape) == 3  # (bs, seq_len, k_codebook)
+        if key not in codebook_acts:
+            codebook_acts[key] = []
+        codebook_acts[key].append(codebook_ids)
+
+    model.set_hook_fn(store_cb_activations)
     trainer, dataset, _ = run_clm.get_trainer_and_dataset(
         model_args,
         data_args,
@@ -28,18 +38,8 @@ def evaluate(model, model_args, data_args, eval_on="train"):
     )
     dataset = dataset[eval_on]
     tokens = dataset["input_ids"]
-
-    codebook_acts = {}
-
-    def store_cb_activations(key, codebook_ids):
-        assert len(codebook_ids.shape) == 3  # (bs, seq_len, k_codebook)
-        if key not in codebook_acts:
-            codebook_acts[key] = []
-        codebook_acts[key].append(codebook_ids)
-
-    model.set_hook_fn(store_cb_activations)
-
     metrics = trainer.evaluate(eval_dataset=dataset)
+    for k, v in codebook_acts.items():
+        codebook_acts[k] = np.concatenate(v, axis=0)
 
-    return tokens, codebook_acts, metrics
     return tokens, codebook_acts, metrics
