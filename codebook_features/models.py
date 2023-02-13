@@ -283,6 +283,15 @@ class CodebookLayer(nn.Module):
         """Return the total number of codes."""
         return self._num_codes
 
+    def set_hook_fn(self, hook_fn: Callable):
+        """Set the hook function.
+
+        Args:
+        ----
+            hook_fn: hook function to use.
+        """
+        self.hook_fn = hook_fn
+
     def forward(self, x):
         """Snaps activations to elements in the codebook.
 
@@ -307,7 +316,7 @@ class CodebookLayer(nn.Module):
             self.tokens_processed += x.shape[0] * x.shape[1]
 
             if self.hook_fn is not None:
-                self.hook_fn(self.key, codebook_ids)
+                self.hook_fn(self.key, codebook_ids.cpu().numpy())
         else:
             # NOTE: was previously doing a gumbel softmax,
             # but found this was not necessary
@@ -522,6 +531,7 @@ class CompositionalCodebookLayer(nn.Module):
                 for i in range(num_codebooks)
             ]
         )
+        self.hook_fn = hook_fn
 
     @property
     def active_codes(self):
@@ -539,6 +549,12 @@ class CompositionalCodebookLayer(nn.Module):
         return sum(codebook.reconstruction_mse for codebook in self.codebook) / len(
             self.codebook
         )
+
+    def set_hook_fn(self, hook_fn):
+        """Set the hook function."""
+        self.hook_fn = hook_fn
+        for codebook in self.codebook:
+            codebook.set_hook_fn(hook_fn)
 
     def forward(self, x):
         """Snaps activations to elements in the codebook.
@@ -952,65 +968,100 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             if i in self.config.layers_to_snap:
                 codebooks_in_layer = []
                 if "transformer_block" in self.config.codebook_at:
-                    layers[i] = TransformerLayerWrapper(
-                        layers[i],
-                        dim=self.model.config.hidden_size,
-                        num_codes=self.config.num_codes,
-                        key=f"layer{i}_tb",
-                        snap_fn=self.snap_fn,
-                        num_codebooks=self.config.num_codebooks,
-                    )
-                    self.codebook_params += list(
-                        layers[i].codebook_layer.codebook.parameters(),
-                    )
-                    codebooks_in_layer.append(layers[i].codebook_layer)
+                    self.codebook_at_transformer(layers, i, codebooks_in_layer)
                 if "mlp" in self.config.codebook_at:
-                    wrapped_mlp = MLPWrapper(
-                        layers[i].__getattr__(self.mlp_key),
-                        dim=self.model.config.hidden_size,
-                        num_codes=self.config.num_codes,
-                        key=f"layer{i}_mlp",
-                        snap_fn=self.snap_fn,
-                        num_codebooks=self.config.num_codebooks,
-                    )
-                    layers[i].__setattr__(self.mlp_key, wrapped_mlp)
-                    self.codebook_params += list(
-                        wrapped_mlp.codebook_layer.codebook.parameters(),
-                    )
-                    codebooks_in_layer.append(wrapped_mlp.codebook_layer)
+                    self.codebook_at_mlp(layers, i, codebooks_in_layer)
+                if "mlp_mid" in self.config.codebook_at:
+                    self.codebook_at_mlp_mid(layers, i, codebooks_in_layer)
                 if "attention" in self.config.codebook_at:
-                    wrapped_attn = TransformerLayerWrapper(
-                        layers[i].__getattr__(self.attention_key),
-                        dim=self.model.config.hidden_size,
-                        num_codes=self.config.num_codes,
-                        key=f"layer{i}_attn",
-                        snap_fn=self.snap_fn,
-                        num_codebooks=self.config.num_codebooks,
-                    )
-                    layers[i].__setattr__(self.attention_key, wrapped_attn)
-                    self.codebook_params += list(
-                        wrapped_attn.codebook_layer.codebook.parameters(),
-                    )
-                    codebooks_in_layer.append(wrapped_attn.codebook_layer)
+                    self.codebook_at_attention(layers, i, codebooks_in_layer)
                 if "attention_and_mlp" in self.config.codebook_at:
-                    codebooks_in_layer.append(
-                        CompositionalCodebookLayer(
-                            dim=self.model.config.hidden_size,
-                            num_codes=self.config.num_codes,
-                            key=f"layer{i}_attn+mlp",
-                            snap_fn=self.snap_fn,
-                            num_codebooks=self.config.num_codebooks,
-                        )
-                    )
-                    self.codebook_params += list(
-                        codebooks_in_layer[-1].parameters(),
-                    )
-                    layers[i] = self.pre_residual_codebook_cls(
-                        self.model.config,
-                        i,
-                        codebooks_in_layer[-1],
+                    self.codebook_at_attention_plus_mlp(layers, i, codebooks_in_layer)
+
+                if len(codebooks_in_layer) == 0:
+                    raise ValueError(
+                        f"Invalid value for `codebook_at`: {self.config.codebook_at}."
                     )
                 self.all_codebooks[i] = codebooks_in_layer
+
+    def codebook_at_transformer(self, layers, i, codebooks_in_layer):
+        layers[i] = TransformerLayerWrapper(
+            layers[i],
+            dim=self.model.config.hidden_size,
+            num_codes=self.config.num_codes,
+            key=f"layer{i}_tb",
+            snap_fn=self.snap_fn,
+            num_codebooks=self.config.num_codebooks,
+        )
+        self.codebook_params += list(
+            layers[i].codebook_layer.codebook.parameters(),
+        )
+        codebooks_in_layer.append(layers[i].codebook_layer)
+
+    def codebook_at_mlp(self, layers, i, codebooks_in_layer):
+        wrapped_mlp = MLPWrapper(
+            layers[i].__getattr__(self.mlp_key),
+            dim=self.model.config.hidden_size,
+            num_codes=self.config.num_codes,
+            key=f"layer{i}_mlp",
+            snap_fn=self.snap_fn,
+            num_codebooks=self.config.num_codebooks,
+        )
+        layers[i].__setattr__(self.mlp_key, wrapped_mlp)
+        self.codebook_params += list(
+            wrapped_mlp.codebook_layer.codebook.parameters(),
+        )
+        codebooks_in_layer.append(wrapped_mlp.codebook_layer)
+
+    def codebook_at_mlp_mid(self, layers, i, codebooks_in_layer):
+        mlp = layers[i].__getattr__(self.mlp_key)
+        wrapped_hidden_layer = MLPWrapper(
+            mlp.__getattr__(self.mlp_mid_key),
+            dim=self.itermediate_size(),
+            num_codes=self.config.num_codes,
+            key=f"layer{i}_mlp_mid",
+            snap_fn=self.snap_fn,
+            num_codebooks=self.config.num_codebooks,
+        )
+        mlp.__setattr__(self.mlp_mid_key, wrapped_hidden_layer)
+        self.codebook_params += list(
+            wrapped_hidden_layer.codebook_layer.codebook.parameters(),
+        )
+        codebooks_in_layer.append(wrapped_hidden_layer.codebook_layer)
+
+    def codebook_at_attention(self, layers, i, codebooks_in_layer):
+        wrapped_attn = TransformerLayerWrapper(
+            layers[i].__getattr__(self.attention_key),
+            dim=self.model.config.hidden_size,
+            num_codes=self.config.num_codes,
+            key=f"layer{i}_attn",
+            snap_fn=self.snap_fn,
+            num_codebooks=self.config.num_codebooks,
+        )
+        layers[i].__setattr__(self.attention_key, wrapped_attn)
+        self.codebook_params += list(
+            wrapped_attn.codebook_layer.codebook.parameters(),
+        )
+        codebooks_in_layer.append(wrapped_attn.codebook_layer)
+
+    def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer):
+        codebooks_in_layer.append(
+            CompositionalCodebookLayer(
+                dim=self.model.config.hidden_size,
+                num_codes=self.config.num_codes,
+                key=f"layer{i}_attn+mlp",
+                snap_fn=self.snap_fn,
+                num_codebooks=self.config.num_codebooks,
+            )
+        )
+        self.codebook_params += list(
+            codebooks_in_layer[-1].parameters(),
+        )
+        layers[i] = self.pre_residual_codebook_cls(
+            self.model.config,
+            i,
+            codebooks_in_layer[-1],
+        )
 
     def reset_codebook_metrics(self):
         """Resets the metrics stored of the codebooks."""
@@ -1028,7 +1079,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def disable_codebooks(self):
         """Disable the use of codebooks in all the layers."""
-        for i, layers in enumerate(self.all_codebooks):
+        for i, layers in self.all_codebooks.items():
             assert i in self.config.layers_to_snap
             for layer in layers:
                 layer.snap = False
@@ -1043,10 +1094,10 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def set_hook_fn(self, hook_fn: Callable):
         """Sets the hook function to be called after every forward pass of every codebook layer."""
-        for i, layers in enumerate(self.all_codebooks):
+        for i, layers in self.all_codebooks.items():
             assert i in self.config.layers_to_snap
             for layer in layers:
-                layer.hook_fn = hook_fn
+                layer.set_hook_fn(hook_fn)
 
     # def freeze_model_params(self):
     #     """Freezes model's actual parameters."""
@@ -1058,9 +1109,20 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     #     for param in self.get_model_params():
     #         param.requires_grad = True
 
+    @abc.abstractmethod
+    def itermediate_size(self):
+        """Returns the intermediate size of the model."""
+        pass
+
     def get_input_embeddings(self):
         """Gets input embeddings of the model."""
         return self.model.get_input_embeddings()
+
+    @property
+    @abc.abstractmethod
+    def mlp_mid_key(self):
+        """Returns the key of layer in MLP layer where codebook is to be applied."""
+        pass
 
     @abc.abstractmethod
     def layers(self):
@@ -1177,6 +1239,13 @@ class GPT2CodebookModel(CodebookModel):
         """Resizes token embeddings of the model."""
         return self.model.resize_token_embeddings(new_num_tokens)
 
+    def itermediate_size(self):
+        """Returns the intermediate size of the model."""
+        if self.model.config.n_inner is not None:
+            return self.model.config.n_inner
+        else:
+            return 4 * self.model.config.hidden_size
+
     @property
     def attention_key(self):
         """Returns the attribute name used for attention in the model."""
@@ -1186,6 +1255,11 @@ class GPT2CodebookModel(CodebookModel):
     def mlp_key(self):
         """Returns the attribute name used for mlp in the model."""
         return "mlp"
+
+    @property
+    def mlp_mid_key(self):
+        """Returns the attribute name used for mlp hidden layer in the model."""
+        return "act"
 
     @property
     def pre_residual_codebook_cls(self):
@@ -1249,6 +1323,10 @@ class GPTNeoXCodebookModel(CodebookModel):
         """Resizes token embeddings of the model."""
         raise NotImplementedError("Not implemented for GPTNeoX.")
 
+    def itermediate_size(self):
+        """Returns the intermediate size of the model."""
+        return self.model.config.intermediate_size
+
     @property
     def attention_key(self):
         """Returns the attribute name used for attention in the model."""
@@ -1258,6 +1336,11 @@ class GPTNeoXCodebookModel(CodebookModel):
     def mlp_key(self):
         """Returns the attribute name used for mlp in the model."""
         return "mlp"
+
+    @property
+    def mlp_mid_key(self):
+        """Returns the attribute name used for mlp hidden layer in the model."""
+        return "act"
 
     @property
     def pre_residual_codebook_cls(self):
