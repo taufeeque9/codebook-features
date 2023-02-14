@@ -265,7 +265,7 @@ class CodebookLayer(nn.Module):
         else:
             self.codebook = nn.Embedding(num_embeddings=num_codes, embedding_dim=dim)
         self._num_codes = num_codes
-        self.counts = torch.zeros(num_codes, dtype=torch.long)
+        self.register_buffer("counts", torch.zeros(num_codes, dtype=torch.long))
         self.soft_snap = soft_snap
         self.snap_fn = snap_fn
         self.hook_fn = hook_fn
