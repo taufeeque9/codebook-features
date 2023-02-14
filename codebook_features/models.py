@@ -265,7 +265,7 @@ class CodebookLayer(nn.Module):
         else:
             self.codebook = nn.Embedding(num_embeddings=num_codes, embedding_dim=dim)
         self._num_codes = num_codes
-        self.counts = Counter()
+        self.counts = torch.zeros(num_codes, dtype=torch.long)
         self.soft_snap = soft_snap
         self.snap_fn = snap_fn
         self.hook_fn = hook_fn
@@ -307,7 +307,9 @@ class CodebookLayer(nn.Module):
             # Hard choice of a single codebook vector
             output, codebook_ids = self.snap_fn.apply(x, self.codebook.weight)
             # update metrics
-            self.counts.update(codebook_ids.cpu().numpy().flat)
+            # self.counts.update(codebook_ids.cpu().numpy().flat)
+            elems, counts = torch.unique(codebook_ids, sorted=False, return_counts=True)
+            self.counts[elems] += counts
             coeff = x.shape[0] * x.shape[1]
             coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
 
@@ -334,7 +336,7 @@ class CodebookLayer(nn.Module):
 
     def reset_metrics(self):
         """Reset the counts of the codebook features."""
-        self.counts.clear()
+        self.counts.zero_()
         self.reconstruction_mse = 0
         self.tokens_processed = 0
 
@@ -356,7 +358,7 @@ class CodebookLayer(nn.Module):
         """
         underused_codes = set()
         for i in range(self.codebook.weight.size(0)):
-            if i not in self.counts or self.counts[i] < threshold:
+            if self.counts[i] < threshold:
                 underused_codes.add(i)
         with torch.no_grad():
             weights = torch.rand((len(underused_codes), self.codebook.weight.size(0)))
@@ -373,11 +375,8 @@ class CodebookLayer(nn.Module):
 
     def most_common_counts(self):
         """Return the most common codebook feature counts."""
-        counts = np.zeros((self.num_codes, 1))
-        counts[list(self.counts.keys())] = np.array(list(self.counts.values())).reshape(
-            -1, 1
-        )
-        return counts
+
+        return self.counts.sort()[0].cpu().numpy()
 
 
 class CompositionalCodebookLayer2(nn.Module):
@@ -592,7 +591,7 @@ class CompositionalCodebookLayer(nn.Module):
 
     def most_common_counts(self):
         """Return the counts of the codebook features."""
-        counts = np.zeros((self.num_codes // self.num_codebooks, 1))
+        counts = np.zeros((self.num_codes))
         for codebook in self.codebook:
             counts += codebook.most_common_counts()
         return counts
