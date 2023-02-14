@@ -147,12 +147,14 @@ class InnerProductSnapFunction(BaseSnapFunction):
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
         logits = torch.matmul(inputs, codebook.T)
-        codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)[1]
+        logits, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
+        probs = torch.softmax(logits, dim=-1)
 
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+            # outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+            outputs = torch.sum(probs.unsqueeze(-1) * outputs, dim=-2)
         # ctx.save_for_backward(codebook, outputs)
         ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
@@ -179,11 +181,13 @@ class EuclideanSnapFunction(BaseSnapFunction):
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
         logits = -torch.cdist(inputs, codebook, p=2)  # logits are negative distances
-        codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)[1]
+        logits, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
+        probs = torch.softmax(logits, dim=-1)
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+            # outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+            outputs = torch.sum(probs.unsqueeze(-1) * outputs, dim=-2)
         # ctx.save_for_backward(codebook, outputs)
         ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
