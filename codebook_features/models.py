@@ -2,13 +2,15 @@
 
 import abc
 from collections import Counter
-from typing import Any, Callable, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
 import torch
 import transformers
 from sklearn.cluster import KMeans
 from torch import nn
+
+from codebook_features import mod_model_classes
 
 
 class KmeansEmbedding(nn.Embedding):
@@ -269,7 +271,7 @@ class CodebookLayer(nn.Module):
         else:
             self.codebook = nn.Embedding(num_embeddings=num_codes, embedding_dim=dim)
         self._num_codes = num_codes
-        self.register_buffer("counts", torch.zeros(num_codes, dtype=torch.long))
+        self.counts = torch.zeros(num_codes, dtype=torch.long)
         self.soft_snap = soft_snap
         self.snap_fn = snap_fn
         self.hook_fn = hook_fn
@@ -280,7 +282,7 @@ class CodebookLayer(nn.Module):
     @property
     def active_codes(self):
         """Return the number of active codes."""
-        return len(self.counts)
+        return torch.sum(self.counts != 0).item()
 
     @property
     def num_codes(self):
@@ -301,19 +303,21 @@ class CodebookLayer(nn.Module):
 
         Args:
         ----
-            x: input tensor of shape: (batch_size, n_channels, dim).
+            x: input tensor of shape: (batch_size, seq_len, dim).
 
         Returns: output with the feature vectors replaced using the codebook.
         """
-        # [batch_size, n_channels, num_codes]
-        assert len(x.shape) == 3
+        assert len(x.shape) == 3  # (batch_size, seq_len, dim)
         if not self.soft_snap:
             # Hard choice of a single codebook vector
             output, codebook_ids = self.snap_fn.apply(x, self.codebook.weight)
             # update metrics
             # self.counts.update(codebook_ids.cpu().numpy().flat)
-            elems, counts = torch.unique(codebook_ids, sorted=False, return_counts=True)
-            self.counts[elems] += counts
+            with torch.no_grad():
+                elems, counts = torch.unique(
+                    codebook_ids, sorted=False, return_counts=True
+                )
+                self.counts[elems] += counts
             coeff = x.shape[0] * x.shape[1]
             coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
 
@@ -737,146 +741,6 @@ class MLPWrapper(CodebookWrapper):
         return layer_outputs
 
 
-class PreResidualCodebookGPT2Block(transformers.models.gpt2.modeling_gpt2.GPT2Block):
-    def __init__(self, config, layer_idx=None, codebook_layer=None):
-        assert not config.add_cross_attention, "Not implemented"
-        super().__init__(config, layer_idx)
-        self.codebook_layer = codebook_layer
-        self.snap = True
-
-    def forward(
-        self,
-        hidden_states: Optional[Tuple[torch.FloatTensor]],
-        layer_past: Optional[Tuple[torch.Tensor]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = False,
-        output_attentions: Optional[bool] = False,
-    ) -> Union[
-        Tuple[torch.Tensor],
-        Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]],
-    ]:
-        residual = hidden_states
-        hidden_states = self.ln_1(hidden_states)
-        attn_outputs = self.attn(
-            hidden_states,
-            layer_past=layer_past,
-            attention_mask=attention_mask,
-            head_mask=head_mask,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-        )
-        attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
-        outputs = attn_outputs[1:]
-        # residual connection
-        hidden_states = attn_output + residual
-
-        if encoder_hidden_states is not None:
-            # add one self-attention block for cross-attention
-            if not hasattr(self, "crossattention"):
-                raise ValueError(
-                    f"If `encoder_hidden_states` are passed, {self} has to be instantiated with "
-                    "cross-attention layers by setting `config.add_cross_attention=True`"
-                )
-            residual = hidden_states
-            hidden_states = self.ln_cross_attn(hidden_states)
-            cross_attn_outputs = self.crossattention(
-                hidden_states,
-                attention_mask=attention_mask,
-                head_mask=head_mask,
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_attention_mask=encoder_attention_mask,
-                output_attentions=output_attentions,
-            )
-            attn_output = cross_attn_outputs[0]
-            # residual connection
-            hidden_states = residual + attn_output
-            outputs = (
-                outputs + cross_attn_outputs[2:]
-            )  # add cross attentions if we output attention weights
-
-        # residual = hidden_states
-        hidden_states = self.ln_2(hidden_states)
-        feed_forward_hidden_states = self.mlp(hidden_states)
-        # residual connection
-        main_stream = feed_forward_hidden_states + attn_output
-        if self.codebook_layer and self.snap:
-            main_stream = self.codebook_layer(main_stream)
-        hidden_states = residual + main_stream
-
-        if use_cache:
-            outputs = (hidden_states,) + outputs
-        else:
-            outputs = (hidden_states,) + outputs[1:]
-
-        return outputs  # hidden_states, present, (attentions, cross_attentions)
-
-
-class PreResidualCodebookGPTNeoXBlock(
-    transformers.models.gpt_neox.modeling_gpt_neox.GPTNeoXLayer
-):
-    def __init__(self, config, layer_idx=None, codebook_layer=None):
-        assert not config.add_cross_attention, "Not implemented"
-        super().__init__(config)
-        self.codebook_layer = codebook_layer
-        self.snap = True
-        self.layer_idx = layer_idx
-
-    def forward(
-        self,
-        hidden_states,
-        attention_mask=None,
-        head_mask=None,
-        use_cache=False,
-        layer_past=None,
-        output_attentions=False,
-    ):
-
-        attention_layer_outputs = self.attention(
-            self.input_layernorm(hidden_states),
-            attention_mask=attention_mask,
-            layer_past=layer_past,
-            head_mask=head_mask,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-        )
-        # output_attn: attn_output, present, (attn_weights)
-        attn_output = attention_layer_outputs[0]
-        outputs = attention_layer_outputs[1:]
-
-        if self.use_parallel_residual:
-            # pseudocode:
-            # x = x + attn(ln1(x)) + mlp(ln2(x))
-            mlp_output = self.mlp(self.post_attention_layernorm(hidden_states))
-            main_stream = mlp_output + attn_output
-            if self.codebook_layer and self.snap:
-                main_stream = self.codebook_layer(main_stream)
-            hidden_states = main_stream + hidden_states
-        else:
-            # pseudocode:
-            # x = x + attn(ln1(x))
-            # x = x + mlp(ln2(x))
-            # attn_output = attn_output + hidden_states
-            mlp_output = self.mlp(
-                self.post_attention_layernorm(attn_output + hidden_states)
-            )
-            main_stream = mlp_output + attn_output
-            if self.codebook_layer and self.snap:
-                main_stream = self.codebook_layer(main_stream)
-            hidden_states = main_stream + hidden_states
-
-        if use_cache:
-            outputs = (
-                hidden_states,
-            ) + outputs  # hidden_states, present, (attn_weights)
-        else:
-            outputs = (hidden_states,) + outputs[1:]  # hidden_states, (attn_weights)
-
-        return outputs
-
-
 class CodebookModelConfig(transformers.PretrainedConfig):
     model_type = "codebook"
 
@@ -978,6 +842,8 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                     self.codebook_at_mlp_mid(layers, i, codebooks_in_layer)
                 if "attention" in self.config.codebook_at:
                     self.codebook_at_attention(layers, i, codebooks_in_layer)
+                if "preproj_attention" in self.config.codebook_at:
+                    self.codebook_at_preprojection_attn(layers, i, codebooks_in_layer)
                 if "attention_and_mlp" in self.config.codebook_at:
                     self.codebook_at_attention_plus_mlp(layers, i, codebooks_in_layer)
 
@@ -1046,6 +912,28 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             wrapped_attn.codebook_layer.codebook.parameters(),
         )
         codebooks_in_layer.append(wrapped_attn.codebook_layer)
+
+    def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer):
+        codebooks_in_layer.append(
+            CompositionalCodebookLayer(
+                dim=self.model.config.hidden_size,
+                num_codes=self.config.num_codes,
+                key=f"layer{i}_attn_preproj",
+                snap_fn=self.snap_fn,
+                num_codebooks=self.config.num_codebooks,
+            )
+        )
+        self.codebook_params += list(
+            codebooks_in_layer[-1].parameters(),
+        )
+        layers[i].__setattr__(
+            self.attention_key,
+            self.pre_projection_attn_codebook_cls(
+                self.model.config,
+                i,
+                codebooks_in_layer[-1],
+            ),
+        )
 
     def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer):
         codebooks_in_layer.append(
@@ -1265,9 +1153,14 @@ class GPT2CodebookModel(CodebookModel):
         return "act"
 
     @property
+    def pre_projection_attn_codebook_cls(self):
+        """Returns the class to use for applying codebook to attention before projection."""
+        return mod_model_classes.PreProjectionAttentionCodebookGPT2
+
+    @property
     def pre_residual_codebook_cls(self):
         """Returns the class to use for codebook before residual."""
-        return PreResidualCodebookGPT2Block
+        return mod_model_classes.PreResidualCodebookGPT2Block
 
     @property
     def num_heads(self):
@@ -1346,9 +1239,14 @@ class GPTNeoXCodebookModel(CodebookModel):
         return "act"
 
     @property
+    def pre_projection_attn_codebook_cls(self):
+        """Returns the class to use for applying codebook to attention before projection."""
+        return mod_model_classes.PreProjectionAttentionCodebookGPTNeoX
+
+    @property
     def pre_residual_codebook_cls(self):
         """Returns the class to use for codebook before residual."""
-        return PreResidualCodebookGPTNeoXBlock
+        return mod_model_classes.PreResidualCodebookGPTNeoXBlock
 
     @property
     def num_heads(self):
