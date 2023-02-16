@@ -45,6 +45,14 @@ class CodebookTrainer(transformers.Trainer):
             preprocess_logits_for_metrics,
         )
 
+    def compute_loss(self, model, inputs, return_outputs=False):
+        loss = super().compute_loss(model, inputs, return_outputs)
+        if isinstance(model, models.CodebookModel) and self.args.codebook_reg_p:
+            loss += self.args.codebook_weight_decay * model.codebook_regularization(
+                self.args.codebook_reg_p
+            )
+        return loss
+
     def log(self, logs: Dict[str, float]) -> None:
         """Adds codebook model related logging.
 

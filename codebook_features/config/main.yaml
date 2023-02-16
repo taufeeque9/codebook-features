@@ -23,6 +23,12 @@ training_args:
   save_steps: 10000
   ddp_find_unused_parameters: False
 
+  train_model_params: True
+  model_lr_factor: 0.1
+  vqvae_loss: False
+  codebook_reg_p: 1
+  codebook_weight_decay: 0.01
+
 pretrained_path: null
 get_baseline: False
 codebook_size: 1000
@@ -30,9 +36,6 @@ layers_to_snap: all
 similarity_metric: euclidean
 codebook_at: attention
 num_compositional_codebooks: 1
-train_model_params: True
-model_lr_factor: 0.1
-vqvae_loss: False
 k_codebook: 3
 tag_keys: []
 tags: []

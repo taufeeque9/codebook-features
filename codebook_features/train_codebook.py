@@ -26,6 +26,7 @@ shortened_args = {
     "train_model_params": "train_mod",
     "model_lr_factor": "mod_lrf",
     "k_codebook": "k",
+    "dataset_name": "ds",
 }
 
 
@@ -38,7 +39,7 @@ def main(cfg):
 
     Returns: tuple of metrics for trained model and the baseline metrics.
     """
-    training_args = transformers.TrainingArguments(**cfg.training_args)
+    training_args = run_clm.TrainingArguments(**cfg.training_args)
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
     training_args.local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -109,7 +110,7 @@ def main(cfg):
         layers_to_snap=cfg.layers_to_snap,
         similarity_metric=cfg.similarity_metric,
         codebook_at=cfg.codebook_at,
-        vqvae_loss=cfg.vqvae_loss,
+        vqvae_loss=training_args.vqvae_loss,
         k_codebook=cfg.k_codebook,
     )
     model = models.wrap_codebook(
@@ -117,14 +118,22 @@ def main(cfg):
         config=codebook_config,
         pretrained_path=cfg.pretrained_path,
     )
-    if cfg.train_model_params:
+    if training_args.train_model_params:
         # model.unfreeze_model_params()
         # params = list(model.parameters())
         params = [
-            {"params": model.get_codebook_params(), "lr": training_args.learning_rate},
+            {
+                "params": model.get_codebook_params(),
+                "lr": training_args.learning_rate,
+                # weight decay for codebook params is used through
+                # `codebook_weight_decay` param that is used directly
+                # to compute regularized loss.
+                "weight_decay": 0.0,
+            },
             {
                 "params": model.get_model_params(),
-                "lr": cfg.model_lr_factor * training_args.learning_rate,
+                "lr": training_args.model_lr_factor * training_args.learning_rate,
+                "weight_decay": training_args.weight_decay,
             },
         ]
     else:
@@ -134,7 +143,6 @@ def main(cfg):
         optimizer = torch.optim.AdamW(
             params,
             training_args.learning_rate,
-            weight_decay=training_args.weight_decay,
         )
     else:
         RuntimeWarning("Codebook not found in model. Training with model params.")

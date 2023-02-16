@@ -149,15 +149,12 @@ class InnerProductSnapFunction(BaseSnapFunction):
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
         logits = torch.matmul(inputs, codebook.T)
-        logits, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
-        probs = torch.softmax(logits, dim=-1)
+        _, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
 
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-            # outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
-            outputs = torch.sum(probs.unsqueeze(-1) * outputs, dim=-2)
-        # ctx.save_for_backward(codebook, outputs)
+            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
         ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
@@ -183,14 +180,11 @@ class EuclideanSnapFunction(BaseSnapFunction):
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
         logits = -torch.cdist(inputs, codebook, p=2)  # logits are negative distances
-        logits, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
-        probs = torch.softmax(logits, dim=-1)
+        _, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
         # enable gradient so that outputs.grad_fn can be used in backward pass.
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-            # outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
-            outputs = torch.sum(probs.unsqueeze(-1) * outputs, dim=-2)
-        # ctx.save_for_backward(codebook, outputs)
+            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
         ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
@@ -314,10 +308,10 @@ class CodebookLayer(nn.Module):
             # update metrics
             # self.counts.update(codebook_ids.cpu().numpy().flat)
             with torch.no_grad():
-                elems, counts = torch.unique(
+                self.codes_triggered, counts = torch.unique(
                     codebook_ids, sorted=False, return_counts=True
                 )
-                self.counts[elems] += counts
+                self.counts[self.codes_triggered.to("cpu")] += counts.to("cpu")
             coeff = x.shape[0] * x.shape[1]
             coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
 
@@ -341,6 +335,10 @@ class CodebookLayer(nn.Module):
 
             output = output.sum(-2)  # codebook size
         return output
+
+    def get_triggered_codes(self):
+        """Return the triggered codes."""
+        return self.codebook(self.codes_triggered)
 
     def reset_metrics(self):
         """Reset the counts of the codebook features."""
@@ -539,6 +537,11 @@ class CompositionalCodebookLayer(nn.Module):
             ]
         )
         self.hook_fn = hook_fn
+
+    def get_triggered_codes(self):
+        """Return the triggered codes of the codebooks."""
+        triggered_codes = [codebook.get_triggered_codes() for codebook in self.codebook]
+        return torch.cat(triggered_codes, dim=0)
 
     @property
     def active_codes(self):
@@ -990,15 +993,24 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             for layer in layers:
                 layer.set_hook_fn(hook_fn)
 
-    # def freeze_model_params(self):
-    #     """Freezes model's actual parameters."""
-    #     for param in self.get_model_params():
-    #         param.requires_grad = False
+    def get_triggered_codes(self):
+        """Gets the codes triggered in the last forward pass."""
+        triggered_codes = []
+        for i, layers in self.all_codebooks.items():
+            for layer in layers:
+                triggered_codes.append(layer.get_triggered_codes())
+        triggered_codes = torch.cat(triggered_codes, dim=0)
+        assert (
+            triggered_codes.shape[1] * self.config.num_codebooks
+            == self.model.config.hidden_size
+        )
+        return triggered_codes
 
-    # def unfreeze_model_params(self):
-    #     """Unfreezes model's actual parameters."""
-    #     for param in self.get_model_params():
-    #         param.requires_grad = True
+    def codebook_regularization(self, p=1):
+        """Regularizer for codebook weights."""
+        triggered_codes = self.get_triggered_codes()
+        reg = triggered_codes.norm(p=p, dim=1).mean()
+        return reg
 
     @abc.abstractmethod
     def itermediate_size(self):

@@ -252,6 +252,28 @@ class DataTrainingArguments:
                 ], "`validation_file` should be a csv, a json or a txt file."
 
 
+@dataclass
+class TrainingArguments(transformers.TrainingArguments):
+    """Arguments pertaining to what data we are going to input our model for training and eval."""
+
+    codebook_reg_p: Optional[int] = field(
+        default=None, metadata={"help": "Regularization norm for codebook."}
+    )
+    codebook_weight_decay: float = field(
+        default=0.0, metadata={"help": "Weight decay for codebook."}
+    )
+    train_model_params: bool = field(
+        default=True, metadata={"help": "Whether to train model parameters."}
+    )
+    model_lr_factor: float = field(
+        default=1.0,
+        metadata={"help": "Factor to multiply `learning_rate` with to get model's lr."},
+    )
+    vqvae_loss: bool = field(
+        default=False, metadata={"help": "Whether to use VQVAE loss."}
+    )
+
+
 def get_trainer_and_dataset(
     model_args: ModelArguments,
     data_args: DataTrainingArguments,
