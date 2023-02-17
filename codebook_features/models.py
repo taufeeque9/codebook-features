@@ -1009,7 +1009,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def codebook_regularization(self, p=1):
         """Regularizer for codebook weights."""
         triggered_codes = self.get_triggered_codes()
-        reg = triggered_codes.norm(p=p, dim=1).mean()
+        reg = triggered_codes.norm(p=p, dim=1).sum()
         return reg
 
     @abc.abstractmethod

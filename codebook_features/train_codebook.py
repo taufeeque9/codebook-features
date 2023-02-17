@@ -76,7 +76,8 @@ def main(cfg):
         )
 
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        cfg.model_args.model_name_or_path,
+        model_args.model_name_or_path,
+        cache_dir=model_args.cache_dir,
     )
     baseline_output_dir = training_args.output_dir + "_baseline"
     if cfg.get_baseline:
