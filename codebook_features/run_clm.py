@@ -281,7 +281,7 @@ def get_trainer_and_dataset(
     model=None,
     optimizers=(None, None),
     callbacks=None,
-) -> Tuple[transformers.Trainer, datasets.Dataset, datasets.Dataset, bool]:
+) -> Tuple[transformers.Trainer, Tuple[datasets.Dataset], bool]:
     """Function to get a trainer for CLMs.
 
     Args:
@@ -372,35 +372,45 @@ def get_trainer_and_dataset(
             streaming=data_args.streaming,
         )
         if "validation" not in raw_datasets.keys():
-            if not data_args.streaming:
+            if "pile" in data_args.dataset_name:
                 raw_datasets["validation"] = load_dataset(
-                    data_args.dataset_name,
+                    "the_pile",
                     data_args.dataset_config_name,
-                    split=f"train[:{data_args.validation_split_percentage}%]",
-                    cache_dir=model_args.cache_dir,
-                    use_auth_token=True if model_args.use_auth_token else None,
-                    streaming=data_args.streaming,
-                )
-                raw_datasets["train"] = load_dataset(
-                    data_args.dataset_name,
-                    data_args.dataset_config_name,
-                    split=f"train[{data_args.validation_split_percentage}%:]",
+                    split=f"validation",
                     cache_dir=model_args.cache_dir,
                     use_auth_token=True if model_args.use_auth_token else None,
                     streaming=data_args.streaming,
                 )
             else:
-                if data_args.max_eval_samples is None:
-                    raise ValueError(
-                        "When streaming, `max_eval_samples` must be specified. "
-                        "This is the number of samples to use for validation."
+                if not data_args.streaming:
+                    raw_datasets["validation"] = load_dataset(
+                        data_args.dataset_name,
+                        data_args.dataset_config_name,
+                        split=f"train[:{data_args.validation_split_percentage}%]",
+                        cache_dir=model_args.cache_dir,
+                        use_auth_token=True if model_args.use_auth_token else None,
+                        streaming=data_args.streaming,
                     )
-                raw_datasets["validation"] = raw_datasets["train"].take(
-                    data_args.max_eval_samples
-                )
-                raw_datasets["train"] = raw_datasets["train"].skip(
-                    data_args.max_eval_samples
-                )
+                    raw_datasets["train"] = load_dataset(
+                        data_args.dataset_name,
+                        data_args.dataset_config_name,
+                        split=f"train[{data_args.validation_split_percentage}%:]",
+                        cache_dir=model_args.cache_dir,
+                        use_auth_token=True if model_args.use_auth_token else None,
+                        streaming=data_args.streaming,
+                    )
+                else:
+                    if data_args.max_eval_samples is None:
+                        raise ValueError(
+                            "When streaming, `max_eval_samples` must be specified. "
+                            "This is the number of samples to use for validation."
+                        )
+                    raw_datasets["validation"] = raw_datasets["train"].take(
+                        data_args.max_eval_samples
+                    )
+                    raw_datasets["train"] = raw_datasets["train"].skip(
+                        data_args.max_eval_samples
+                    )
     else:
         data_files = {}
         dataset_args = {}
