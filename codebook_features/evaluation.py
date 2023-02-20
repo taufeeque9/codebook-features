@@ -42,4 +42,8 @@ def evaluate(model, model_args, data_args, eval_on="train"):
     for k, v in codebook_acts.items():
         codebook_acts[k] = np.concatenate(v, axis=0)
 
+    np.save(f"{output_dir}/tokens.npy", tokens)
+    np.save(f"{output_dir}/cb_acts.npy", codebook_acts)
+    np.save(f"{output_dir}/metrics.npy", metrics)
+
     return tokens, codebook_acts, metrics

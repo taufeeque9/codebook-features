@@ -283,6 +283,10 @@ class CodebookLayer(nn.Module):
         """Return the total number of codes."""
         return self._num_codes
 
+    def get_most_used_code(self):
+        """Return the most used code."""
+        return self.codebook(self.counts.argmax()).cpu().detach().numpy()
+
     def set_hook_fn(self, hook_fn: Callable):
         """Set the hook function.
 
@@ -560,6 +564,10 @@ class CompositionalCodebookLayer(nn.Module):
             self.codebook
         )
 
+    def get_most_used_code(self):
+        """Return the most used code. Uses the first codebook by default."""
+        return self.codebook[0].get_most_used_code()
+
     def set_hook_fn(self, hook_fn):
         """Set the hook function."""
         self.hook_fn = hook_fn
@@ -602,7 +610,8 @@ class CompositionalCodebookLayer(nn.Module):
 
     def most_common_counts(self):
         """Return the counts of the codebook features."""
-        counts = np.zeros((self.num_codes))
+        # num_codes contains total codes across compositional codebooks
+        counts = np.zeros(self.num_codes // self.num_codebooks)
         for codebook in self.codebook:
             counts += codebook.most_common_counts()
         return counts

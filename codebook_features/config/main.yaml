@@ -1,6 +1,6 @@
 model_args:
-  model_name_or_path: taufeeque/tiny-gpt2
-  cache_dir: /data/.cache/huggingface/datasets
+  model_name_or_path: EleutherAI/pythia-70m-deduped
+  cache_dir: /data/.cache/huggingface/
 data_args:
   dataset_name: wikitext
   dataset_config_name: wikitext-103-v1
@@ -26,7 +26,7 @@ training_args:
   train_model_params: True
   model_lr_factor: 0.1
   vqvae_loss: False
-  codebook_reg_p: 1
+  codebook_reg_p: null
   codebook_weight_decay: 0.01
 
 pretrained_path: null
