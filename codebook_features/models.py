@@ -285,7 +285,7 @@ class CodebookLayer(nn.Module):
 
     def get_most_used_code(self):
         """Return the most used code."""
-        return self.codebook.cpu()(self.counts.argmax()).detach().numpy()
+        return self.codebook.weight[self.counts.argmax()].detach().cpu().numpy()
 
     def set_hook_fn(self, hook_fn: Callable):
         """Set the hook function.
