@@ -132,7 +132,11 @@ class WandbCallback(transformers.integrations.WandbCallback):
         elif any("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
 
-        if isinstance(model, models.CodebookModel) and control.should_evaluate:
+        if (
+            isinstance(model, models.CodebookModel)
+            and control.should_evaluate
+            and args.local_rank <= 0
+        ):
             for codebook_idx, codebooks in model.all_codebooks.items():
                 counts = codebooks[0].most_common_counts()
                 counts = wandb.Table(
@@ -161,10 +165,14 @@ class WandbCallback(transformers.integrations.WandbCallback):
 
             model.reset_codebook_metrics()
 
-        if control.should_evaluate:
+        if control.should_evaluate and args.local_rank <= 0:
             super().on_log(args, state, control, model, logs, **kwargs)
 
-        if isinstance(model, models.CodebookModel) and control.should_evaluate:
+        if (
+            isinstance(model, models.CodebookModel)
+            and control.should_evaluate
+            and args.local_rank <= 0
+        ):
             for codebook_idx in model.all_codebooks:
                 logs.pop(metric_prefix + f"code_counts/layer{codebook_idx}")
                 logs.pop(metric_prefix + f"code_weights/layer{codebook_idx}")
