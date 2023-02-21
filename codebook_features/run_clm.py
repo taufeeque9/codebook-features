@@ -252,6 +252,28 @@ class DataTrainingArguments:
                 ], "`validation_file` should be a csv, a json or a txt file."
 
 
+@dataclass
+class TrainingArguments(transformers.TrainingArguments):
+    """Arguments pertaining to what data we are going to input our model for training and eval."""
+
+    codebook_reg_p: Optional[int] = field(
+        default=None, metadata={"help": "Regularization norm for codebook."}
+    )
+    codebook_weight_decay: float = field(
+        default=0.0, metadata={"help": "Weight decay for codebook."}
+    )
+    train_model_params: bool = field(
+        default=True, metadata={"help": "Whether to train model parameters."}
+    )
+    model_lr_factor: float = field(
+        default=1.0,
+        metadata={"help": "Factor to multiply `learning_rate` with to get model's lr."},
+    )
+    vqvae_loss: bool = field(
+        default=False, metadata={"help": "Whether to use VQVAE loss."}
+    )
+
+
 def get_trainer_and_dataset(
     model_args: ModelArguments,
     data_args: DataTrainingArguments,
@@ -259,7 +281,7 @@ def get_trainer_and_dataset(
     model=None,
     optimizers=(None, None),
     callbacks=None,
-) -> Tuple[transformers.Trainer, datasets.Dataset, datasets.Dataset, bool]:
+) -> Tuple[transformers.Trainer, Tuple[datasets.Dataset], bool]:
     """Function to get a trainer for CLMs.
 
     Args:
@@ -350,22 +372,45 @@ def get_trainer_and_dataset(
             streaming=data_args.streaming,
         )
         if "validation" not in raw_datasets.keys():
-            raw_datasets["validation"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[:{data_args.validation_split_percentage}%]",
-                cache_dir=model_args.cache_dir,
-                use_auth_token=True if model_args.use_auth_token else None,
-                streaming=data_args.streaming,
-            )
-            raw_datasets["train"] = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=f"train[{data_args.validation_split_percentage}%:]",
-                cache_dir=model_args.cache_dir,
-                use_auth_token=True if model_args.use_auth_token else None,
-                streaming=data_args.streaming,
-            )
+            if "pile" in data_args.dataset_name:
+                raw_datasets["validation"] = load_dataset(
+                    "the_pile",
+                    data_args.dataset_config_name,
+                    split=f"validation",
+                    cache_dir=model_args.cache_dir,
+                    use_auth_token=True if model_args.use_auth_token else None,
+                    streaming=data_args.streaming,
+                )
+            else:
+                if not data_args.streaming:
+                    raw_datasets["validation"] = load_dataset(
+                        data_args.dataset_name,
+                        data_args.dataset_config_name,
+                        split=f"train[:{data_args.validation_split_percentage}%]",
+                        cache_dir=model_args.cache_dir,
+                        use_auth_token=True if model_args.use_auth_token else None,
+                        streaming=data_args.streaming,
+                    )
+                    raw_datasets["train"] = load_dataset(
+                        data_args.dataset_name,
+                        data_args.dataset_config_name,
+                        split=f"train[{data_args.validation_split_percentage}%:]",
+                        cache_dir=model_args.cache_dir,
+                        use_auth_token=True if model_args.use_auth_token else None,
+                        streaming=data_args.streaming,
+                    )
+                else:
+                    if data_args.max_eval_samples is None:
+                        raise ValueError(
+                            "When streaming, `max_eval_samples` must be specified. "
+                            "This is the number of samples to use for validation."
+                        )
+                    raw_datasets["validation"] = raw_datasets["train"].take(
+                        data_args.max_eval_samples
+                    )
+                    raw_datasets["train"] = raw_datasets["train"].skip(
+                        data_args.max_eval_samples
+                    )
     else:
         data_files = {}
         dataset_args = {}
@@ -688,12 +733,12 @@ def main(
 
         metrics = train_result.metrics
 
-        max_train_samples = (
-            data_args.max_train_samples
-            if data_args.max_train_samples is not None
-            else len(train_dataset)
-        )
         if not isinstance(train_dataset, datasets.IterableDataset):
+            max_train_samples = (
+                data_args.max_train_samples
+                if data_args.max_train_samples is not None
+                else len(train_dataset)
+            )
             metrics["train_samples"] = min(max_train_samples, len(train_dataset))
 
         trainer.log_metrics("train", metrics)
@@ -706,12 +751,12 @@ def main(
 
         metrics = trainer.evaluate()
 
-        max_eval_samples = (
-            data_args.max_eval_samples
-            if data_args.max_eval_samples is not None
-            else len(eval_dataset)
-        )
         if not isinstance(eval_dataset, datasets.IterableDataset):
+            max_eval_samples = (
+                data_args.max_eval_samples
+                if data_args.max_eval_samples is not None
+                else len(eval_dataset)
+            )
             metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
         try:
             perplexity = math.exp(metrics["eval_loss"])

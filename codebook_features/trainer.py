@@ -2,10 +2,12 @@
 
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import transformers
 from torch import nn
 
+import wandb
 from codebook_features import models
 
 
@@ -45,6 +47,18 @@ class CodebookTrainer(transformers.Trainer):
             preprocess_logits_for_metrics,
         )
 
+    def compute_loss(self, model, inputs, return_outputs=False):
+        if return_outputs:
+            loss, outputs = super().compute_loss(model, inputs, return_outputs)
+        else:
+            loss = super().compute_loss(model, inputs, return_outputs)
+
+        if isinstance(model, models.CodebookModel) and self.args.codebook_reg_p:
+            loss += self.args.codebook_weight_decay * model.codebook_regularization(
+                self.args.codebook_reg_p
+            )
+        return (loss, outputs) if return_outputs else loss
+
     def log(self, logs: Dict[str, float]) -> None:
         """Adds codebook model related logging.
 
@@ -52,6 +66,12 @@ class CodebookTrainer(transformers.Trainer):
         ----
             logs: log dictionary.
         """
+        metric_prefix = ""
+        if any("train_" in k for k in logs.keys()):
+            metric_prefix = "train_"
+        elif any("eval_" in k for k in logs.keys()):
+            metric_prefix = "eval_"
+
         if isinstance(self.model, models.CodebookModel):
 
             all_codebooks = self.model.all_codebooks
@@ -63,18 +83,22 @@ class CodebookTrainer(transformers.Trainer):
                     dead_code_count += codebook.num_codes - codebook.active_codes
                 layer_codes = sum(codebook.num_codes for codebook in codebooks)
                 if layer_codes:
-                    logs[f"dead_code_fraction/layer{codebook_idx}"] = (
+                    logs[metric_prefix + f"dead_code_fraction/layer{codebook_idx}"] = (
                         dead_code_count / layer_codes
                     )
-                    logs[f"MSE/layer{codebook_idx}"] = sum(
+                    logs[metric_prefix + f"MSE/layer{codebook_idx}"] = sum(
                         codebook.reconstruction_mse for codebook in codebooks
                     ) / len(codebooks)
                     layer_mean_norm = sum(
                         codebook.avg_norm() for codebook in codebooks
                     ) / len(codebooks)
                     layer_max_norm = max(codebook.max_norm() for codebook in codebooks)
-                    logs[f"mean_norm/layer{codebook_idx}"] = layer_mean_norm
-                    logs[f"max_norm/layer{codebook_idx}"] = layer_max_norm
+                    logs[
+                        metric_prefix + f"mean_norm/layer{codebook_idx}"
+                    ] = layer_mean_norm
+                    logs[
+                        metric_prefix + f"max_norm/layer{codebook_idx}"
+                    ] = layer_max_norm
                     mean_norm += layer_mean_norm
                     max_norm = max(max_norm, layer_max_norm)
                     # table = wandb.Table(
@@ -88,28 +112,70 @@ class CodebookTrainer(transformers.Trainer):
                 total_codes += layer_codes
 
             if total_codes:
-                logs["dead_code_fraction"] = overall_dead_code_count / total_codes
-                logs["MSE"] = sum(
-                    logs[f"MSE/layer{codebook_idx}"] for codebook_idx in all_codebooks
+                logs[metric_prefix + "dead_code_fraction"] = (
+                    overall_dead_code_count / total_codes
+                )
+                logs[metric_prefix + "MSE"] = sum(
+                    logs[metric_prefix + f"MSE/layer{codebook_idx}"]
+                    for codebook_idx in all_codebooks
                 ) / len(all_codebooks)
-                logs["mean_norm"] = mean_norm / len(all_codebooks)
-                logs["max_norm"] = max_norm
+                logs[metric_prefix + "mean_norm"] = mean_norm / len(all_codebooks)
+                logs[metric_prefix + "max_norm"] = max_norm
         super().log(logs)
 
 
 class WandbCallback(transformers.integrations.WandbCallback):
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
-        if isinstance(model, models.CodebookModel):
-            # for codebook_idx, codebooks in model.all_codebooks.items():
-            #     table = wandb.Table(
-            #         data=codebooks[0].most_common_counts(),
-            #         columns=["freq"],
-            #     )
-            #     logs[f"cb_histogram_layer{codebook_idx}"] = wandb.plot.histogram(
-            #         table, "freq", title="Codebook Histogram"
-            #     )
+        metric_prefix = ""
+        if any("train_" in k for k in logs.keys()):
+            metric_prefix = "train_"
+        elif any("eval_" in k for k in logs.keys()):
+            metric_prefix = "eval_"
+
+        if (
+            isinstance(model, models.CodebookModel)
+            and control.should_evaluate
+            and args.local_rank <= 0
+        ):
+            for codebook_idx, codebooks in model.all_codebooks.items():
+                counts = codebooks[0].most_common_counts()
+                counts = wandb.Table(
+                    data=np.stack((np.arange(counts.size), counts), axis=-1),
+                    columns=["code", "count"],
+                )
+                logs[
+                    metric_prefix + f"code_counts/layer{codebook_idx}"
+                ] = wandb.plot.bar(
+                    counts,
+                    "code",
+                    "count",
+                    title=f"Code Counts Layer{codebook_idx}",
+                )
+                weight_table = wandb.Table(
+                    data=codebooks[0].get_most_used_code().reshape(-1, 1),
+                    columns=["weight"],
+                )
+                logs[
+                    metric_prefix + f"code_weights/layer{codebook_idx}"
+                ] = wandb.plot.histogram(
+                    weight_table,
+                    "weight",
+                    title=f"Code Weight Distribution Layer{codebook_idx}",
+                )
+
             model.reset_codebook_metrics()
-        super().on_log(args, state, control, model, logs, **kwargs)
+
+        if control.should_evaluate and args.local_rank <= 0:
+            super().on_log(args, state, control, model, logs, **kwargs)
+
+        if (
+            isinstance(model, models.CodebookModel)
+            and control.should_evaluate
+            and args.local_rank <= 0
+        ):
+            for codebook_idx in model.all_codebooks:
+                logs.pop(metric_prefix + f"code_counts/layer{codebook_idx}")
+                logs.pop(metric_prefix + f"code_weights/layer{codebook_idx}")
 
 
 class MultiOptimizer(torch.optim.Optimizer):

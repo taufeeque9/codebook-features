@@ -4,7 +4,7 @@ import pytest
 import torch
 import transformers
 
-from codebook_features import evaluate, models, run_clm
+from codebook_features import evaluation, models, run_clm
 
 
 def test_bert_codebook_model():
@@ -61,7 +61,7 @@ def test_evaluate():
         dataset_config_name="wikitext-103-v1",
         streaming=False,
     )
-    tokens, cb_acts, metrics = evaluate.evaluate(
+    tokens, cb_acts, metrics = evaluation.evaluate(
         model=model, model_args=model_args, data_args=data_args, eval_on="validation"
     )
     for _, v in cb_acts.items():
