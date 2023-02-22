@@ -22,7 +22,7 @@ shortened_args = {
     "layers_to_snap": "cb_layers",
     "similarity_metric": "sim",
     "codebook_at": "cb_at",
-    "vqvae_loss": "vqvae",
+    "loss": "loss",
     "train_model_params": "train_mod",
     "model_lr_factor": "mod_lrf",
     "k_codebook": "k",
@@ -111,7 +111,7 @@ def main(cfg):
         layers_to_snap=cfg.layers_to_snap,
         similarity_metric=cfg.similarity_metric,
         codebook_at=cfg.codebook_at,
-        vqvae_loss=training_args.vqvae_loss,
+        loss=training_args.loss,
         k_codebook=cfg.k_codebook,
     )
     model = models.wrap_codebook(

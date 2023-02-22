@@ -39,15 +39,9 @@ import evaluate
 import transformers
 from datasets import load_dataset
 from transformers import (  # HfArgumentParser,; TrainingArguments,
-    CONFIG_MAPPING,
-    MODEL_FOR_CAUSAL_LM_MAPPING,
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    default_data_collator,
-    is_torch_tpu_available,
-    set_seed,
-)
+    CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig,
+    AutoModelForCausalLM, AutoTokenizer, default_data_collator,
+    is_torch_tpu_available, set_seed)
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
@@ -269,8 +263,8 @@ class TrainingArguments(transformers.TrainingArguments):
         default=1.0,
         metadata={"help": "Factor to multiply `learning_rate` with to get model's lr."},
     )
-    vqvae_loss: bool = field(
-        default=False, metadata={"help": "Whether to use VQVAE loss."}
+    loss: bool = field(
+        default="base", metadata={"help": "The loss function to use. Can be `base`, `aeloss`, or `vqvae`."}
     )
 
 

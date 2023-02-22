@@ -90,7 +90,7 @@ class BaseSnapFunction(torch.autograd.Function):
     """Autograd Fn to snap input to closest codebook feature.
     This is the base class. It should be subclassed with a forward function."""
 
-    vqvae_loss = False
+    loss = "base"
     k = 1
 
     @staticmethod
@@ -106,8 +106,8 @@ class BaseSnapFunction(torch.autograd.Function):
         Returns: tuple of gradient tensor wrt `inputs` and `codebook` tensors.
         """
         inputs, codebook, codebook_ids, outputs = ctx.saved_tensors
-        if BaseSnapFunction.vqvae_loss:
-            raise NotImplementedError("VQVAE backward not implemeted with multicode.")
+        if BaseSnapFunction.loss == "vqvae":
+            raise NotImplementedError("VQVAE backward not implemented with multicode.")
             grad_outputs / 3
             range_idx = (
                 torch.arange(codebook.shape[0])
@@ -123,10 +123,14 @@ class BaseSnapFunction(torch.autograd.Function):
             grad_codebook = 2 * torch.nan_to_num(codebook - mean_inputs)
             # straight through estimator + commitment loss gradient
             grad_inputs = grad_outputs + 2 * (inputs - outputs)
-        else:
+        elif BaseSnapFunction.loss == "base":
             grad_codebook = torch.autograd.grad(outputs, codebook, grad_outputs)[0]
             # straight through estimator
             grad_inputs = grad_outputs
+        elif BaseSnapFunction.loss == "aeloss":
+            grad_codebook = torch.autograd.grad(outputs, codebook, grad_outputs)[0]
+            # straight through estimator + commitment loss gradient
+            grad_inputs = grad_outputs + 2 * (inputs - outputs)
 
         return grad_inputs, grad_codebook
 
@@ -763,10 +767,23 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         layers_to_snap: Sequence = (),
         similarity_metric: str = "euclidean",
         codebook_at: str = "mlp",
-        vqvae_loss: bool = False,
+        loss: str = "base",
         k_codebook: int = 1,
         **kwargs,
     ) -> None:
+        """Create the config for the codebook model.
+
+        Args:
+        ----
+            num_codes: number of codebook features to have.
+            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
+                Defaults to []. Can contain negative numbers to index from the last layers.
+            similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
+            codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
+            loss: whether to use the loss used in VQVAE paper or the CLM loss.
+            k_codebook: number of nearest neighbors in codebook snapping.
+        """
         super().__init__(**kwargs)
         self.num_codes = num_codes
         self.num_codebooks = num_codebooks
@@ -775,8 +792,13 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         self.codebook_at = codebook_at
         if isinstance(codebook_at, str):
             self.codebook_at = codebook_at.lower().split(",")
-        self.vqvae_loss = vqvae_loss
+        self.loss = loss
         self.k_codebook = k_codebook
+
+        if self.loss not in ["base", "aeloss", "vqvae"]:
+            raise ValueError(f"Invalid loss {loss}")
+        if self.similarity_metric not in ["euclidean", "inner_product"]:
+            raise ValueError(f"Invalid similarity metric {similarity_metric}")
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):
@@ -793,15 +815,8 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
         Args:
         ----
+            config: config for the model.
             model: torch model to apply codebooks to.
-            num_codes: number of codebook features to have.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
-            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
-                Defaults to []. Can contain negative numbers to index from the last layers.
-            similarity_metric: similarity metric to use. Can be either 'euclidean' or 'inner_product'.
-            codebook_at: where to apply the codebook. Can be either 'mlp' or 'attention'.
-            vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
-            k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(config=config)
         self.model = model
@@ -825,7 +840,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.codebook_params = []
         self.all_codebooks = {}
         # self.freeze_model_params()
-        BaseSnapFunction.vqvae_loss = self.config.vqvae_loss
+        BaseSnapFunction.loss = self.config.loss
         BaseSnapFunction.k = self.config.k_codebook
         if self.config.similarity_metric == "euclidean":
             self.snap_fn = EuclideanSnapFunction
@@ -1052,38 +1067,19 @@ class BertCodebookModel(CodebookModel):
 
     def __init__(
         self,
+        config,
         model,
-        num_codes,
-        num_codebooks: int = 1,
-        layers_to_snap=(),
-        similarity_metric="euclidean",
-        codebook_at: str = "mlp",
-        vqvae_loss: bool = False,
-        k_codebook: int = 1,
     ):
         """Build the codebook based model.
 
         Args:
         ----
+            config: config for the model.
             model: bert model to apply codebooks to.
-            num_codes: number of codebook features to have.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
-            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
-                Defaults to []. Can contain negative numbers to index from the last layers.
-            similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
-            codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
-            vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
-            k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(
+            config=config,
             model=model,
-            num_codes=num_codes,
-            num_codebooks=num_codebooks,
-            layers_to_snap=layers_to_snap,
-            similarity_metric=similarity_metric,
-            codebook_at=codebook_at,
-            vqvae_loss=vqvae_loss,
-            k_codebook=k_codebook,
         )
         self.add_codebooks()
         self.forward = self.model.forward
@@ -1112,15 +1108,9 @@ class GPT2CodebookModel(CodebookModel):
 
         Args:
         ----
+            config: config for the model.
             model: GPT2 model to apply codebooks to.
-            num_codes: number of codebook features to have.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
-            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
-                Defaults to []. Can contain negative numbers to index from the last layers.
-            similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
-            codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
-            vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
-            k_codebook: number of nearest neighbors in codebook snapping.
+
         """
         super().__init__(
             config=config,
@@ -1201,15 +1191,8 @@ class GPTNeoXCodebookModel(CodebookModel):
 
         Args:
         ----
+            config: config for the model.
             model: GPT2 model to apply codebooks to.
-            num_codes: number of codebook features to have.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
-            layers_to_snap: Index of transformer layers in the model on which codebook to apply.
-                Defaults to []. Can contain negative numbers to index from the last layers.
-            similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
-            codebook_at: where to apply codebook. Can be either 'mlp' (default) or 'transformer_block'.
-            vqvae_loss: whether to use the loss used in VQVAE paper or the CLM loss.
-            k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(
             config=config,

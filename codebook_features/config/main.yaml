@@ -25,7 +25,7 @@ training_args:
 
   train_model_params: True
   model_lr_factor: 0.1
-  vqvae_loss: False
+  loss: base
   codebook_reg_p: null
   codebook_weight_decay: 0.01
 
