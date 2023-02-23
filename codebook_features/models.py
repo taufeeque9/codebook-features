@@ -94,7 +94,7 @@ class BaseSnapFunction(torch.autograd.Function):
     k = 1
 
     @staticmethod
-    def backward(ctx, grad_outputs, grad_codebook_ids, grad_mse):
+    def backward(ctx, grad_outputs, grad_codebook_ids):
         """Backward pass for the snap function using straight-through operator.
 
         Args:
@@ -105,7 +105,7 @@ class BaseSnapFunction(torch.autograd.Function):
 
         Returns: tuple of gradient tensor wrt `inputs` and `codebook` tensors.
         """
-        inputs, codebook, codebook_ids, outputs, mse = ctx.saved_tensors
+        inputs, codebook, codebook_ids, outputs = ctx.saved_tensors
         if BaseSnapFunction.loss == "vqvae":
             raise NotImplementedError("VQVAE backward not implemented with multicode.")
             grad_outputs / 3
@@ -128,10 +128,16 @@ class BaseSnapFunction(torch.autograd.Function):
             # straight through estimator
             grad_inputs = grad_outputs
         elif BaseSnapFunction.loss == "aeloss":
+            # grad_codebook_mse = torch.autograd.grad(mse, codebook, retain_graph=True)[0]
+            with torch.enable_grad():
+                mse_loss = torch.mean(((outputs - inputs) ** 2).sum(dim=-1))
+                grad_codebook_mse = torch.autograd.grad(
+                    mse_loss, codebook, retain_graph=True
+                )[0]
             grad_codebook = torch.autograd.grad(
-                outputs, codebook, grad_outputs, retain_graph=True
+                outputs, codebook, grad_outputs
             )[0]
-            grad_codebook_mse = torch.autograd.grad(mse, codebook)[0]
+
             grad_codebook += grad_codebook_mse
             # straight through estimator
             grad_inputs = grad_outputs
@@ -194,12 +200,12 @@ class EuclideanSnapFunction(BaseSnapFunction):
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
             outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
-            mse = torch.mean(torch.sum(((inputs - outputs) ** 2), dim=-1))
-        ctx.save_for_backward(inputs, codebook, codebook_ids, outputs, mse)
+            # mse = torch.mean(torch.sum(((inputs - outputs) ** 2), dim=-1))
+        ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
         # outputs.grad_fn to be overridden.
-        return outputs.detach().clone(), codebook_ids, mse
+        return outputs.detach().clone(), codebook_ids
 
 
 class CompostionalEuclideanSnapFunction(BaseSnapFunction):
@@ -318,7 +324,7 @@ class CodebookLayer(nn.Module):
         assert len(x.shape) == 3  # (batch_size, seq_len, dim)
         if not self.soft_snap:
             # Hard choice of a single codebook vector
-            output, codebook_ids, mse = self.snap_fn.apply(x, self.codebook.weight)
+            output, codebook_ids = self.snap_fn.apply(x, self.codebook.weight)
             # update metrics
             # self.counts.update(codebook_ids.cpu().numpy().flat)
             with torch.no_grad():
@@ -328,7 +334,7 @@ class CodebookLayer(nn.Module):
                 self.counts[self.codes_triggered] += counts
             coeff = x.shape[0] * x.shape[1]
             coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
-
+            mse = torch.mean(((x - output) ** 2).sum(dim=-1))
             self.reconstruction_mse += coeff * (mse.item() - self.reconstruction_mse)
             self.tokens_processed += x.shape[0] * x.shape[1]
 
