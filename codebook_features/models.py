@@ -106,23 +106,16 @@ class BaseSnapFunction(torch.autograd.Function):
         Returns: tuple of gradient tensor wrt `inputs` and `codebook` tensors.
         """
         inputs, codebook, codebook_ids, outputs = ctx.saved_tensors
-        if BaseSnapFunction.loss == "vqvae":
-            raise NotImplementedError("VQVAE backward not implemented with multicode.")
-            grad_outputs / 3
-            range_idx = (
-                torch.arange(codebook.shape[0])
-                .unsqueeze(-1)
-                .unsqueeze(-1)
-                .unsqueeze(-1)
-            )
-            range_idx = range_idx.to(inputs.device)
-            idx = codebook_ids.unsqueeze(0) == range_idx
-            mean_inputs = torch.stack(
-                [inputs[idx[i]].mean(0) for i in range(codebook.shape[0])]
-            ).to(inputs.device)
-            grad_codebook = 2 * torch.nan_to_num(codebook - mean_inputs)
+        if BaseSnapFunction.loss[:5] == "vqvae":
+            try:
+                beta = float(BaseSnapFunction.loss.split("-")[1])
+            except IndexError:
+                beta = 0.25
+            with torch.enable_grad():
+                mse_loss = torch.mean(((outputs - inputs) ** 2).sum(dim=-1))
+                grad_codebook = torch.autograd.grad(mse_loss, codebook)[0]
             # straight through estimator + commitment loss gradient
-            grad_inputs = grad_outputs + 2 * (inputs - outputs)
+            grad_inputs = grad_outputs + (2 * beta) * (inputs - outputs)
         elif BaseSnapFunction.loss == "base":
             grad_codebook = torch.autograd.grad(outputs, codebook, grad_outputs)[0]
             # straight through estimator
@@ -134,13 +127,26 @@ class BaseSnapFunction(torch.autograd.Function):
                 grad_codebook_mse = torch.autograd.grad(
                     mse_loss, codebook, retain_graph=True
                 )[0]
-            grad_codebook = torch.autograd.grad(
-                outputs, codebook, grad_outputs
-            )[0]
+            grad_codebook = torch.autograd.grad(outputs, codebook, grad_outputs)[0]
 
             grad_codebook += grad_codebook_mse
             # straight through estimator
             grad_inputs = grad_outputs
+        elif BaseSnapFunction.loss[:10] == "fullaeloss":
+            try:
+                beta = float(BaseSnapFunction.loss.split("-")[1])
+            except IndexError:
+                beta = 0.25
+            with torch.enable_grad():
+                mse_loss = torch.mean(((outputs - inputs) ** 2).sum(dim=-1))
+                grad_codebook_mse = torch.autograd.grad(
+                    mse_loss, codebook, retain_graph=True
+                )[0]
+            grad_codebook = torch.autograd.grad(outputs, codebook, grad_outputs)[0]
+
+            grad_codebook += grad_codebook_mse
+            # straight through estimator
+            grad_inputs = grad_outputs + 2 * (inputs - outputs)
 
         return grad_inputs, grad_codebook
 
@@ -806,9 +812,9 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         self.loss = loss
         self.k_codebook = k_codebook
 
-        if self.loss not in ["base", "aeloss", "vqvae"]:
+        if loss.split("-")[0] not in ["base", "aeloss", "fullaeloss", "vqvae"]:
             raise ValueError(f"Invalid loss {loss}")
-        if self.similarity_metric not in ["euclidean", "inner_product"]:
+        if similarity_metric not in ["euclidean", "inner_product"]:
             raise ValueError(f"Invalid similarity metric {similarity_metric}")
 
 
