@@ -18,6 +18,7 @@ shortened_args = {
     "model_name_or_path": "mod",
     "learning_rate": "lr",
     "per_device_train_batch_size": "bs",
+    "codebook_type": "cbt",
     "codebook_size": "cbs",
     "num_compositional_codebooks": "nccb",
     "layers_to_snap": "cb_layers",
