@@ -20,7 +20,7 @@ shortened_args = {
     "per_device_train_batch_size": "bs",
     "codebook_type": "cbt",
     "codebook_size": "cbs",
-    "num_compositional_codebooks": "nccb",
+    "num_codebooks": "ncb",
     "layers_to_snap": "cb_layers",
     "similarity_metric": "sim",
     "codebook_at": "cb_at",
