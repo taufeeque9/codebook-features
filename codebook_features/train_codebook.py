@@ -11,7 +11,8 @@ import torch
 import transformers
 
 import wandb
-from codebook_features import models, run_clm, trainer
+from codebook_features import models, run_clm
+from codebook_features import trainer as cb_trainer
 
 shortened_args = {
     "model_name_or_path": "mod",
@@ -106,13 +107,15 @@ def main(cfg):
     if training_args.local_rank == 0:
         wandb.log(baseline_metrics, commit=False)
     codebook_config = models.CodebookModelConfig(
+        codebook_type=cfg.codebook_type,
         num_codes=cfg.codebook_size,
-        num_codebooks=cfg.num_compositional_codebooks,
+        num_codebooks=cfg.num_codebooks,
         layers_to_snap=cfg.layers_to_snap,
         similarity_metric=cfg.similarity_metric,
         codebook_at=cfg.codebook_at,
         loss=training_args.loss,
         k_codebook=cfg.k_codebook,
+        kmeans_init=cfg.kmeans_init,
     )
     model = models.wrap_codebook(
         model_or_path=model,
@@ -120,8 +123,6 @@ def main(cfg):
         pretrained_path=cfg.pretrained_path,
     )
     if training_args.train_model_params:
-        # model.unfreeze_model_params()
-        # params = list(model.parameters())
         params = [
             {
                 "params": model.get_codebook_params(),
@@ -138,7 +139,6 @@ def main(cfg):
             },
         ]
     else:
-        # model.freeze_model_params()
         params = model.get_codebook_params()
     if len(params) > 0:
         optimizer = torch.optim.AdamW(
@@ -149,14 +149,22 @@ def main(cfg):
         RuntimeWarning("Codebook not found in model. Training with model params.")
         optimizer = None
 
-    metrics = run_clm.main(
+    trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
         model_args,
         data_args,
-        training_args=training_args,
-        model=model,
+        training_args,
+        model,
         optimizers=(optimizer, None),
-        callbacks=[trainer.WandbCallback()],
+        callbacks=[cb_trainer.WandbCallback()],
     )
+
+    if codebook_config.kmeans_init:
+        model.init_codebook(trainer.get_train_dataloader())
+
+    metrics = run_clm.run_trainer(
+        model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
+    )
+
     return metrics, baseline_metrics
 
 

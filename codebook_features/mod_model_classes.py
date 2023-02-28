@@ -294,5 +294,3 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
             outputs += (attn_weights,)
 
         return outputs
-
-        return outputs

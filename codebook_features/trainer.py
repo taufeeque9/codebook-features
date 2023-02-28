@@ -2,6 +2,7 @@
 
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import transformers
 from torch import nn
@@ -141,16 +142,17 @@ class WandbCallback(transformers.integrations.WandbCallback):
         ):
             for codebook_idx, codebooks in model.all_codebooks.items():
                 counts = codebooks[0].most_common_counts()
+                counts = np.stack([np.arange(counts.size), counts], axis=1)
                 counts = wandb.Table(
-                    data=counts.reshape(-1, 1),
-                    columns=["count"],
+                    data=counts,
+                    columns=["x", "count"],
                 )
                 logs[
                     metric_prefix + f"code_counts/layer{codebook_idx}"
                 ] = wandb.plot_table(
-                    vega_spec_name="histogram",
+                    vega_spec_name="wandb/line/v0",
                     data_table=counts,
-                    fields={"value": "count", "title": "Code Count Distribution"},
+                    fields={"x": "x", "y": "count", "title": "Code Count Distribution"},
                 )
                 if metric_prefix == "eval_":
                     continue

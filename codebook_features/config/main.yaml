@@ -31,12 +31,14 @@ training_args:
 
 pretrained_path: null
 get_baseline: False
+codebook_type: vanilla
 codebook_size: 1000
 layers_to_snap: all
 similarity_metric: euclidean
 codebook_at: attention
 num_compositional_codebooks: 1
 k_codebook: 3
+kmeans_init: False
 tag_keys: []
 tags: []
 project: gpt2-codebook

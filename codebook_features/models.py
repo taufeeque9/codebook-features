@@ -1,14 +1,16 @@
 """Model related classes."""
 
 import abc
+import contextlib
 from collections import Counter
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence, Type, Union
 
 import numpy as np
+import sklearn
 import torch
 import transformers
-from sklearn.cluster import KMeans
 from torch import nn
+from tqdm import tqdm
 
 from codebook_features import mod_model_classes
 
@@ -73,14 +75,20 @@ class KmeansEmbedding(nn.Embedding):
             else:
                 self.data = torch.cat([self.data, data], dim=0)
 
-    def initialize(self, k: int):
+    def clear_data(self):
+        """Clear the data."""
+        self.data = None
+
+    def initialize(self, k: int, data: torch.Tensor = None):
         """Initialize the embeddings after all the data is loaded.
 
         Args:
         ----
             k: number of cluster centers for K-Means.
         """
-        kmeans = KMeans(n_clusters=k)
+        if data is not None:
+            self.load_data(data)
+        kmeans = sklearn.cluster.KMeans(n_clusters=k)
         kmeans = kmeans.fit(self.data.detach().cpu().numpy())
         self._weight = torch.from_numpy(kmeans.cluster_centers_)
         self.data = None
@@ -105,7 +113,7 @@ class BaseSnapFunction(torch.autograd.Function):
 
         Returns: tuple of gradient tensor wrt `inputs` and `codebook` tensors.
         """
-        inputs, codebook, codebook_ids, outputs = ctx.saved_tensors
+        inputs, codebook, outputs = ctx.saved_tensors
         if BaseSnapFunction.loss[:5] == "vqvae":
             try:
                 beta = float(BaseSnapFunction.loss.split("-")[1])
@@ -175,7 +183,7 @@ class InnerProductSnapFunction(BaseSnapFunction):
         with torch.enable_grad():
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
             outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
-        ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
+        ctx.save_for_backward(inputs, codebook, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
         # outputs.grad_fn to be overridden.
@@ -207,7 +215,7 @@ class EuclideanSnapFunction(BaseSnapFunction):
             outputs = torch.nn.functional.embedding(codebook_ids, codebook)
             outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
             # mse = torch.mean(torch.sum(((inputs - outputs) ** 2), dim=-1))
-        ctx.save_for_backward(inputs, codebook, codebook_ids, outputs)
+        ctx.save_for_backward(inputs, codebook, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
         # outputs.grad_fn to be overridden.
@@ -304,6 +312,16 @@ class CodebookLayer(nn.Module):
     def num_codes(self):
         """Return the total number of codes."""
         return self._num_codes
+
+    def initialize_codebook(self, data: torch.Tensor):
+        """Initialize the codebook using k-means.
+
+        Args:
+        ----
+            data: data to use for initializing the codebook.
+        """
+        assert isinstance(self.codebook, KmeansEmbedding)
+        self.codebook.initialize(k=self.num_codes, data=data)
 
     def get_most_used_code(self):
         """Return the most used code."""
@@ -408,6 +426,16 @@ class CodebookLayer(nn.Module):
         """Return the most common codebook feature counts."""
 
         return self.counts.sort()[0].cpu().numpy()
+
+    def load_data(self, data: torch.Tensor):
+        """Load the data for kmeans."""
+        assert isinstance(self.codebook, KmeansEmbedding)
+        self.codebook.load_data(data)
+
+    def clear_data(self):
+        """Clear the data for kmeans."""
+        assert isinstance(self.codebook, KmeansEmbedding)
+        self.codebook.clear_data()
 
 
 class CompositionalCodebookLayer2(nn.Module):
@@ -637,6 +665,138 @@ class CompositionalCodebookLayer(nn.Module):
             counts += codebook.most_common_counts()
         return counts
 
+    def load_data(self, data: torch.Tensor):
+        """Load data into the codebook."""
+        for i, chunk in enumerate(data.chunk(self.num_codebooks, dim=-1)):
+            self.codebook[i].load_data(chunk)
+
+    def clear_data(self):
+        """Clear the data stored in the codebook."""
+        for codebook in self.codebook:
+            codebook.clear_data()
+
+
+class GroupedCodebookLayer(nn.Module):
+    """Module that applies distinct codebooks to chunks of input vectors."""
+
+    def __init__(
+        self,
+        dim: int,
+        num_codes: int,
+        key: str,
+        kmeans_init=False,
+        soft_snap: bool = False,
+        snap_fn: BaseSnapFunction = EuclideanSnapFunction,
+        num_codebooks: int = 1,
+        hook_fn: Callable = None,
+    ):
+        super().__init__()
+        if num_codes % num_codebooks != 0:
+            raise ValueError(
+                "num_codes must be divisible by num_codebooks."
+                f" Got num_codes: {num_codes}, num_codebooks: {num_codebooks}"
+            )
+
+        self.codebook = nn.ModuleList(
+            [
+                CodebookLayer(
+                    dim,
+                    num_codes // num_codebooks,
+                    key=key + f"_gcb{i}",
+                    kmeans_init=kmeans_init,
+                    soft_snap=soft_snap,
+                    snap_fn=snap_fn,
+                    hook_fn=hook_fn,
+                )
+                for i in range(num_codebooks)
+            ]
+        )
+        self.num_codebooks = num_codebooks
+        self.hook_fn = hook_fn
+        self.key = key
+
+    def get_triggered_codes(self):
+        """Return the triggered codes of the codebooks."""
+        triggered_codes = [codebook.get_triggered_codes() for codebook in self.codebook]
+        return torch.cat(triggered_codes, dim=0)
+
+    @property
+    def active_codes(self):
+        """Return the number of active codes in all the codebooks."""
+        return sum(codebook.active_codes for codebook in self.codebook)
+
+    @property
+    def num_codes(self):
+        """Return the total number of codes in all the codebooks."""
+        return sum(codebook.num_codes for codebook in self.codebook)
+
+    @property
+    def reconstruction_mse(self):
+        """Return the reconstruction mse of the codebooks."""
+        return sum(codebook.reconstruction_mse for codebook in self.codebook) / len(
+            self.codebook
+        )
+
+    def get_most_used_code(self):
+        """Return the most used code. Uses the first codebook by default."""
+        return self.codebook[0].get_most_used_code()
+
+    def set_hook_fn(self, hook_fn):
+        """Set the hook function."""
+        self.hook_fn = hook_fn
+        for codebook in self.codebook:
+            codebook.set_hook_fn(hook_fn)
+
+    def forward(self, x):
+        """Snaps activations to elements in the codebook.
+
+        Args:
+        ----
+            x: input tensor of shape: (batch_size, seq_len, dim).
+
+        Returns: output with the feature vectors replaced using the compositional codebook.
+        """
+        assert len(x.shape) == 3
+        output = torch.stack(
+            [codebook(x) for codebook in self.codebook],
+            dim=0,
+        )
+        output = output.mean(dim=0)
+        return output
+
+    def reset_metrics(self):
+        """Reset the metrics stored in the codebooks."""
+        for codebook in self.codebook:
+            codebook.reset_metrics()
+
+    def avg_norm(self):
+        """Return the average norm of the codebook features."""
+        return (
+            sum(codebook.avg_norm() for codebook in self.codebook) / self.num_codebooks
+        )
+
+    def max_norm(self):
+        """Return the average norm of the codebook features."""
+        return max(codebook.max_norm() for codebook in self.codebook)
+
+    def most_common_counts(self):
+        """Return the counts of the codebook features."""
+        # num_codes contains total codes across compositional codebooks
+        counts = np.zeros(self.num_codes // self.num_codebooks)
+        for codebook in self.codebook:
+            counts += codebook.most_common_counts()
+        return counts
+
+    def load_data(self, data: torch.Tensor):
+        """Load data into the codebook."""
+        for i, chunk in enumerate(data.chunk(self.num_codebooks, dim=-1)):
+            self.codebook[i].load_data(chunk)
+
+    def clear_data(self):
+        """Clear the data stored in the codebook."""
+        for codebook in self.codebook:
+            codebook.clear_data()
+
 
 class CodebookWrapper(nn.Module, abc.ABC):
     """Wraps a nn module by applying codebooks on the output of the layer."""
@@ -644,6 +804,11 @@ class CodebookWrapper(nn.Module, abc.ABC):
     def __init__(
         self,
         module_layer: nn.Module,
+        codebook_cls: Union[
+            Type[CodebookLayer],
+            Type[CompositionalCodebookLayer],
+            Type[GroupedCodebookLayer],
+        ],
         dim: int,
         num_codes: int,
         key: str,
@@ -664,7 +829,7 @@ class CodebookWrapper(nn.Module, abc.ABC):
         """
         super().__init__()
         self.module_layer = module_layer
-        self.codebook_layer = CompositionalCodebookLayer(
+        self.codebook_layer = codebook_cls(
             dim,
             num_codes,
             key=key,
@@ -673,10 +838,21 @@ class CodebookWrapper(nn.Module, abc.ABC):
             hook_fn=hook_fn,
         )
         self.snap = True
+        self._store_data = False
 
     @abc.abstractmethod
     def forward(self, *args, **kwargs):
         pass
+
+    @contextlib.contextmanager
+    def kmeans_init(self):
+        """Context manager to initialize codebooks using kmeans."""
+        try:
+            self._store_data = True
+            yield
+        finally:
+            self._store_data = False
+            self.codebook_layer.clear_data()
 
 
 class TransformerLayerWrapper(CodebookWrapper):
@@ -685,6 +861,11 @@ class TransformerLayerWrapper(CodebookWrapper):
     def __init__(
         self,
         module_layer: nn.Module,
+        codebook_cls: Union[
+            Type[CodebookLayer],
+            Type[CompositionalCodebookLayer],
+            Type[GroupedCodebookLayer],
+        ],
         dim: int,
         num_codes: int,
         key: str,
@@ -705,6 +886,7 @@ class TransformerLayerWrapper(CodebookWrapper):
         """
         super().__init__(
             module_layer=module_layer,
+            codebook_cls=codebook_cls,
             dim=dim,
             num_codes=num_codes,
             key=key,
@@ -720,6 +902,8 @@ class TransformerLayerWrapper(CodebookWrapper):
             returns the output of the transformer layer.
         """
         layer_outputs = self.module_layer(*args, **kwargs)
+        if self._store_data:
+            self.codebook_layer.load_data(layer_outputs[0])
         if self.snap:
             snapped_output = self.codebook_layer(layer_outputs[0])
             layer_outputs = (snapped_output, *layer_outputs[1:])
@@ -733,6 +917,11 @@ class MLPWrapper(CodebookWrapper):
     def __init__(
         self,
         module_layer: nn.Module,
+        codebook_cls: Union[
+            Type[CodebookLayer],
+            Type[CompositionalCodebookLayer],
+            Type[GroupedCodebookLayer],
+        ],
         dim: int,
         num_codes: int,
         key: str,
@@ -753,6 +942,7 @@ class MLPWrapper(CodebookWrapper):
         """
         super().__init__(
             module_layer=module_layer,
+            codebook_cls=codebook_cls,
             dim=dim,
             num_codes=num_codes,
             key=key,
@@ -779,6 +969,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
 
     def __init__(
         self,
+        codebook_type="vanilla",
         num_codes: int = 100,
         num_codebooks: int = 1,
         layers_to_snap: Sequence = (),
@@ -786,6 +977,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         codebook_at: str = "mlp",
         loss: str = "base",
         k_codebook: int = 1,
+        kmeans_init: bool = False,
         **kwargs,
     ) -> None:
         """Create the config for the codebook model.
@@ -802,6 +994,17 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(**kwargs)
+        if codebook_type not in ["vanilla", "compositional", "grouped"]:
+            raise ValueError(f"Invalid codebook type {codebook_type}")
+        if codebook_type == "vanilla" and num_codebooks != 1:
+            raise ValueError("Vanilla codebook type can only have 1 codebook.")
+
+        if loss.split("-")[0] not in ["base", "aeloss", "fullaeloss", "vqvae"]:
+            raise ValueError(f"Invalid loss {loss}")
+        if similarity_metric not in ["euclidean", "inner_product"]:
+            raise ValueError(f"Invalid similarity metric {similarity_metric}")
+
+        self.codebook_type = codebook_type
         self.num_codes = num_codes
         self.num_codebooks = num_codebooks
         self.layers_to_snap = layers_to_snap
@@ -811,11 +1014,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             self.codebook_at = codebook_at.lower().split(",")
         self.loss = loss
         self.k_codebook = k_codebook
-
-        if loss.split("-")[0] not in ["base", "aeloss", "fullaeloss", "vqvae"]:
-            raise ValueError(f"Invalid loss {loss}")
-        if similarity_metric not in ["euclidean", "inner_product"]:
-            raise ValueError(f"Invalid similarity metric {similarity_metric}")
+        self.kmeans_init = kmeans_init
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):
@@ -836,6 +1035,13 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             model: torch model to apply codebooks to.
         """
         super().__init__(config=config)
+        if config.codebook_type == "vanilla":
+            self.codebook_cls = CodebookLayer
+        elif config.codebook_type == "compositional":
+            self.codebook_cls = CompositionalCodebookLayer
+        elif config.codebook_type == "grouped":
+            self.codebook_cls = GroupedCodebookLayer
+
         self.model = model
         self.model_params = list(model.parameters())
 
@@ -900,6 +1106,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def codebook_at_transformer(self, layers, i, codebooks_in_layer):
         layers[i] = TransformerLayerWrapper(
             layers[i],
+            codebook_cls=self.codebook_cls,
             dim=self.model.config.hidden_size,
             num_codes=self.config.num_codes,
             key=f"layer{i}_tb",
@@ -914,6 +1121,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def codebook_at_mlp(self, layers, i, codebooks_in_layer):
         wrapped_mlp = MLPWrapper(
             layers[i].__getattr__(self.mlp_key),
+            codebook_cls=self.codebook_cls,
             dim=self.model.config.hidden_size,
             num_codes=self.config.num_codes,
             key=f"layer{i}_mlp",
@@ -930,6 +1138,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         mlp = layers[i].__getattr__(self.mlp_key)
         wrapped_hidden_layer = MLPWrapper(
             mlp.__getattr__(self.mlp_mid_key),
+            codebook_cls=self.codebook_cls,
             dim=self.itermediate_size(),
             num_codes=self.config.num_codes,
             key=f"layer{i}_mlp_mid",
@@ -945,6 +1154,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def codebook_at_attention(self, layers, i, codebooks_in_layer):
         wrapped_attn = TransformerLayerWrapper(
             layers[i].__getattr__(self.attention_key),
+            codebook_cls=self.codebook_cls,
             dim=self.model.config.hidden_size,
             num_codes=self.config.num_codes,
             key=f"layer{i}_attn",
@@ -959,7 +1169,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer):
         codebooks_in_layer.append(
-            CompositionalCodebookLayer(
+            self.codebook_cls(
                 dim=self.model.config.hidden_size,
                 num_codes=self.config.num_codes,
                 key=f"layer{i}_attn_preproj",
@@ -981,7 +1191,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer):
         codebooks_in_layer.append(
-            CompositionalCodebookLayer(
+            self.codebook_cls(
                 dim=self.model.config.hidden_size,
                 num_codes=self.config.num_codes,
                 key=f"layer{i}_attn+mlp",
@@ -1053,14 +1263,25 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         reg = triggered_codes.norm(p=p, dim=1).sum()
         return reg
 
+    def get_input_embeddings(self):
+        """Gets input embeddings of the model."""
+        return self.model.get_input_embeddings()
+
+    def init_codebook(self, dataloader):
+        self.model.eval()
+        self.disable_codebooks()
+
+        for data in tqdm(dataloader):
+            input_ids = data["input_ids"].to(self.device)
+            data["attention_mask"].to(self.device)
+            self.model.embed_in(input_ids)
+
+        pass
+
     @abc.abstractmethod
     def itermediate_size(self):
         """Returns the intermediate size of the model."""
         pass
-
-    def get_input_embeddings(self):
-        """Gets input embeddings of the model."""
-        return self.model.get_input_embeddings()
 
     @property
     @abc.abstractmethod

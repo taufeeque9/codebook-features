@@ -264,7 +264,10 @@ class TrainingArguments(transformers.TrainingArguments):
         metadata={"help": "Factor to multiply `learning_rate` with to get model's lr."},
     )
     loss: bool = field(
-        default="base", metadata={"help": "The loss function to use. Can be `base`, `aeloss`, or `vqvae`."}
+        default="base",
+        metadata={
+            "help": "The loss function to use. Can be `base`, `aeloss`, or `vqvae`."
+        },
     )
 
 
@@ -688,13 +691,13 @@ def get_trainer_and_dataset(
     return trainer, lm_datasets, last_checkpoint
 
 
-def main(
+def run_trainer(
     model_args: ModelArguments,
     data_args: DataTrainingArguments,
     training_args: transformers.TrainingArguments,
-    model=None,
-    optimizers=(None, None),
-    callbacks=None,
+    trainer: transformers.Trainer,
+    lm_datasets: datasets.DatasetDict,
+    last_checkpoint: Optional[int] = None,
 ):
     """Function to train/evaluate CLMs.
 
@@ -708,9 +711,6 @@ def main(
 
     Returns: If evaluating then evaluation metrics of the final model and if not, then train metrics.
     """
-    trainer, lm_datasets, last_checkpoint = get_trainer_and_dataset(
-        model_args, data_args, training_args, model, optimizers, callbacks
-    )
     train_dataset = lm_datasets["train"]
     eval_dataset = lm_datasets["validation"]
     metrics = None
