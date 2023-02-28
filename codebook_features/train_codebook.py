@@ -117,6 +117,7 @@ def main(cfg):
         loss=training_args.loss,
         k_codebook=cfg.k_codebook,
         kmeans_init=cfg.kmeans_init,
+        kmeans_kwargs=cfg_dict["kmeans_kwargs"],
     )
     model = models.wrap_codebook(
         model_or_path=model,

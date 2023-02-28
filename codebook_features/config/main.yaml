@@ -11,11 +11,11 @@ training_args:
   overwrite_output_dir: True
   do_train: True
   do_eval: True
-  per_device_train_batch_size: 16
-  per_device_eval_batch_size: 32
+  per_device_train_batch_size: 24
+  per_device_eval_batch_size: 8
   warmup_ratio: 0.1
-  learning_rate: 5e-5
-  max_steps: 20000
+  learning_rate: 5e-4
+  max_steps: 15000
   logging_first_step: True
   logging_steps: 100
   evaluation_strategy: steps
@@ -39,6 +39,8 @@ codebook_at: attention
 num_compositional_codebooks: 1
 k_codebook: 100
 kmeans_init: False
+kmeans_kwargs:
+  batch_size: 24576
 tag_keys: []
 tags: []
 project: gpt2-codebook

@@ -1,14 +1,13 @@
 """Model related classes."""
 
 import abc
-import contextlib
 from collections import Counter
-from typing import Any, Callable, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 
 import numpy as np
-import sklearn
 import torch
 import transformers
+from sklearn import cluster as sklearn_cluster
 from torch import nn
 from tqdm import tqdm
 
@@ -30,6 +29,7 @@ class KmeansEmbedding(nn.Embedding):
         _weight: Optional[torch.Tensor] = None,
         device=None,
         dtype=None,
+        **kmeans_kwargs,
     ):
         """Create K-Means Embedding.
 
@@ -61,6 +61,9 @@ class KmeansEmbedding(nn.Embedding):
             dtype,
         )
         self.data = None
+        self.kmeans = sklearn_cluster.MiniBatchKMeans(
+            n_clusters=num_embeddings, **kmeans_kwargs
+        )
 
     def load_data(self, data: torch.Tensor):
         """Load a batch of data.
@@ -79,19 +82,21 @@ class KmeansEmbedding(nn.Embedding):
         """Clear the data."""
         self.data = None
 
-    def initialize(self, k: int, data: torch.Tensor = None):
+    def partial_fit(self):
+        """Fit the K-Means model to the loaded data."""
+        self.data = self.data.reshape(-1, self.embedding_dim)
+        self.kmeans.partial_fit(self.data.detach().cpu().numpy())
+        self.clear_data()
+
+    def initialize(self):
         """Initialize the embeddings after all the data is loaded.
 
         Args:
         ----
             k: number of cluster centers for K-Means.
         """
-        if data is not None:
-            self.load_data(data)
-        kmeans = sklearn.cluster.KMeans(n_clusters=k)
-        kmeans = kmeans.fit(self.data.detach().cpu().numpy())
-        self._weight = torch.from_numpy(kmeans.cluster_centers_)
-        self.data = None
+        self._weight = torch.from_numpy(self.kmeans.cluster_centers_)
+        self.clear_data()
 
 
 class BaseSnapFunction(torch.autograd.Function):
@@ -273,10 +278,11 @@ class CodebookLayer(nn.Module):
         dim: int,
         num_codes: int,
         key: str,
-        kmeans_init=False,
         soft_snap: bool = False,
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         hook_fn: Callable = None,
+        kmeans_init=False,
+        kmeans_kwargs: dict = {},
     ):
         """Create the codebook layer.
 
@@ -291,7 +297,9 @@ class CodebookLayer(nn.Module):
         """
         super().__init__()
         if kmeans_init:
-            self.codebook = KmeansEmbedding(num_embeddings=num_codes, embedding_dim=dim)
+            self.codebook = KmeansEmbedding(
+                num_embeddings=num_codes, embedding_dim=dim, **kmeans_kwargs
+            )
         else:
             self.codebook = nn.Embedding(num_embeddings=num_codes, embedding_dim=dim)
         self._num_codes = num_codes
@@ -321,7 +329,7 @@ class CodebookLayer(nn.Module):
             data: data to use for initializing the codebook.
         """
         assert isinstance(self.codebook, KmeansEmbedding)
-        self.codebook.initialize(k=self.num_codes, data=data)
+        self.codebook.initialize(data=data)
 
     def get_most_used_code(self):
         """Return the most used code."""
@@ -436,6 +444,16 @@ class CodebookLayer(nn.Module):
         """Clear the data for kmeans."""
         assert isinstance(self.codebook, KmeansEmbedding)
         self.codebook.clear_data()
+
+    def initialize(self):
+        """Initialize the codebook with kmeans."""
+        assert isinstance(self.codebook, KmeansEmbedding)
+        self.codebook.initialize()
+
+    def partial_fit_codebook(self):
+        """Update the codebook with the data."""
+        assert isinstance(self.codebook, KmeansEmbedding)
+        self.codebook.partial_fit()
 
 
 class CompositionalCodebookLayer2(nn.Module):
@@ -554,6 +572,7 @@ class CompositionalCodebookLayer(nn.Module):
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
         hook_fn: Callable = None,
+        kmeans_kwargs: dict = {},
     ):
         """Create the compositional codebook layer.
 
@@ -575,6 +594,7 @@ class CompositionalCodebookLayer(nn.Module):
                 )
             )
         self.num_codebooks = num_codebooks
+        seed = kmeans_kwargs.get("random_state", 0)
         self.codebook = nn.ModuleList(
             [
                 CodebookLayer(
@@ -585,6 +605,7 @@ class CompositionalCodebookLayer(nn.Module):
                     soft_snap=soft_snap,
                     snap_fn=snap_fn,
                     hook_fn=hook_fn,
+                    kmeans_kwargs={**kmeans_kwargs, "random_state": seed + i},
                 )
                 for i in range(num_codebooks)
             ]
@@ -675,6 +696,16 @@ class CompositionalCodebookLayer(nn.Module):
         for codebook in self.codebook:
             codebook.clear_data()
 
+    def initialize(self):
+        """Initialize the codebook using kmeans."""
+        for codebook in self.codebook:
+            codebook.initialize()
+
+    def partial_fit_codebook(self):
+        """Partially fit the codebook using kmeans."""
+        for codebook in self.codebook:
+            codebook.partial_fit_codebook()
+
 
 class GroupedCodebookLayer(nn.Module):
     """Module that applies distinct codebooks to chunks of input vectors."""
@@ -689,6 +720,7 @@ class GroupedCodebookLayer(nn.Module):
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
         hook_fn: Callable = None,
+        kmeans_kwargs: Dict = {},
     ):
         super().__init__()
         if num_codes % num_codebooks != 0:
@@ -696,7 +728,7 @@ class GroupedCodebookLayer(nn.Module):
                 "num_codes must be divisible by num_codebooks."
                 f" Got num_codes: {num_codes}, num_codebooks: {num_codebooks}"
             )
-
+        seed = kmeans_kwargs.get("random_state", 0)
         self.codebook = nn.ModuleList(
             [
                 CodebookLayer(
@@ -707,6 +739,7 @@ class GroupedCodebookLayer(nn.Module):
                     soft_snap=soft_snap,
                     snap_fn=snap_fn,
                     hook_fn=hook_fn,
+                    kmeans_kwargs={**kmeans_kwargs, "random_state": seed + i},
                 )
                 for i in range(num_codebooks)
             ]
@@ -789,13 +822,23 @@ class GroupedCodebookLayer(nn.Module):
 
     def load_data(self, data: torch.Tensor):
         """Load data into the codebook."""
-        for i, chunk in enumerate(data.chunk(self.num_codebooks, dim=-1)):
-            self.codebook[i].load_data(chunk)
+        for codebook in self.codebook:
+            codebook.load_data(data)
 
     def clear_data(self):
         """Clear the data stored in the codebook."""
         for codebook in self.codebook:
             codebook.clear_data()
+
+    def initialize(self):
+        """Initialize the codebook using kmeans."""
+        for codebook in self.codebook:
+            codebook.initialize()
+
+    def partial_fit_codebook(self):
+        """Partially fit the codebook using kmeans."""
+        for codebook in self.codebook:
+            codebook.partial_fit_codebook()
 
 
 class CodebookWrapper(nn.Module, abc.ABC):
@@ -815,6 +858,7 @@ class CodebookWrapper(nn.Module, abc.ABC):
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
         hook_fn: Callable = None,
+        **kwargs,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -829,13 +873,13 @@ class CodebookWrapper(nn.Module, abc.ABC):
         """
         super().__init__()
         self.module_layer = module_layer
+        kwargs.update(key=key, snap_fn=snap_fn, hook_fn=hook_fn)
+        if codebook_cls != CodebookLayer:
+            kwargs["num_codebooks"] = num_codebooks
         self.codebook_layer = codebook_cls(
             dim,
             num_codes,
-            key=key,
-            snap_fn=snap_fn,
-            num_codebooks=num_codebooks,
-            hook_fn=hook_fn,
+            **kwargs,
         )
         self.snap = True
         self._store_data = False
@@ -844,15 +888,14 @@ class CodebookWrapper(nn.Module, abc.ABC):
     def forward(self, *args, **kwargs):
         pass
 
-    @contextlib.contextmanager
-    def kmeans_init(self):
+    def store_data(self):
         """Context manager to initialize codebooks using kmeans."""
-        try:
-            self._store_data = True
-            yield
-        finally:
-            self._store_data = False
-            self.codebook_layer.clear_data()
+        self._store_data = True
+
+    def initialize_codebooks(self):
+        """Initialize the codebooks using kmeans."""
+        self.codebook_layer.initialize()
+        self._store_data = False
 
 
 class TransformerLayerWrapper(CodebookWrapper):
@@ -872,6 +915,7 @@ class TransformerLayerWrapper(CodebookWrapper):
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
         hook_fn: Callable = None,
+        **kwargs,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -893,6 +937,7 @@ class TransformerLayerWrapper(CodebookWrapper):
             snap_fn=snap_fn,
             num_codebooks=num_codebooks,
             hook_fn=hook_fn,
+            **kwargs,
         )
 
     def forward(self, *args, **kwargs):
@@ -978,6 +1023,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         loss: str = "base",
         k_codebook: int = 1,
         kmeans_init: bool = False,
+        kmeans_kwargs: dict = {},
         **kwargs,
     ) -> None:
         """Create the config for the codebook model.
@@ -1015,6 +1061,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         self.loss = loss
         self.k_codebook = k_codebook
         self.kmeans_init = kmeans_init
+        self.kmeans_kwargs = kmeans_kwargs
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):
@@ -1061,7 +1108,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                     self.config.layers_to_snap[i] += num_layers
         self.config.layers_to_snap = sorted(self.config.layers_to_snap)
         self.codebook_params = []
-        self.all_codebooks = {}
+        self.all_codebook_wrappers = {}
         # self.freeze_model_params()
         BaseSnapFunction.loss = self.config.loss
         BaseSnapFunction.k = self.config.k_codebook
@@ -1077,6 +1124,13 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     @property
     def device(self):
         return self.model.device
+
+    @property
+    def all_codebooks(self):
+        return {
+            k: [v.codebook_layer for v in vl]
+            for k, vl in self.all_codebook_wrappers.items()
+        }
 
     def add_codebooks(self):
         """Adds codebooks for the layers that are to be snapped."""
@@ -1101,7 +1155,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                     raise ValueError(
                         f"Invalid value for `codebook_at`: {self.config.codebook_at}."
                     )
-                self.all_codebooks[i] = codebooks_in_layer
+                self.all_codebook_wrappers[i] = codebooks_in_layer
 
     def codebook_at_transformer(self, layers, i, codebooks_in_layer):
         layers[i] = TransformerLayerWrapper(
@@ -1112,11 +1166,13 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             key=f"layer{i}_tb",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks,
+            kmeans_init=self.config.kmeans_init,
+            kmeans_kwargs=self.config.kmeans_kwargs,
         )
         self.codebook_params += list(
             layers[i].codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(layers[i].codebook_layer)
+        codebooks_in_layer.append(layers[i])
 
     def codebook_at_mlp(self, layers, i, codebooks_in_layer):
         wrapped_mlp = MLPWrapper(
@@ -1127,12 +1183,14 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             key=f"layer{i}_mlp",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks,
+            kmeans_init=self.config.kmeans_init,
+            kmeans_kwargs=self.config.kmeans_kwargs,
         )
         layers[i].__setattr__(self.mlp_key, wrapped_mlp)
         self.codebook_params += list(
             wrapped_mlp.codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(wrapped_mlp.codebook_layer)
+        codebooks_in_layer.append(wrapped_mlp)
 
     def codebook_at_mlp_mid(self, layers, i, codebooks_in_layer):
         mlp = layers[i].__getattr__(self.mlp_key)
@@ -1144,12 +1202,14 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             key=f"layer{i}_mlp_mid",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks,
+            kmeans_init=self.config.kmeans_init,
+            kmeans_kwargs=self.config.kmeans_kwargs,
         )
         mlp.__setattr__(self.mlp_mid_key, wrapped_hidden_layer)
         self.codebook_params += list(
             wrapped_hidden_layer.codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(wrapped_hidden_layer.codebook_layer)
+        codebooks_in_layer.append(wrapped_hidden_layer)
 
     def codebook_at_attention(self, layers, i, codebooks_in_layer):
         wrapped_attn = TransformerLayerWrapper(
@@ -1160,12 +1220,14 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             key=f"layer{i}_attn",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks,
+            kmeans_init=self.config.kmeans_init,
+            kmeans_kwargs=self.config.kmeans_kwargs,
         )
         layers[i].__setattr__(self.attention_key, wrapped_attn)
         self.codebook_params += list(
             wrapped_attn.codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(wrapped_attn.codebook_layer)
+        codebooks_in_layer.append(wrapped_attn)
 
     def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer):
         codebooks_in_layer.append(
@@ -1175,6 +1237,8 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 key=f"layer{i}_attn_preproj",
                 snap_fn=self.snap_fn,
                 num_codebooks=self.config.num_codebooks,
+                kmeans_init=self.config.kmeans_init,
+                kmeans_kwargs=self.config.kmeans_kwargs,
             )
         )
         self.codebook_params += list(
@@ -1197,6 +1261,8 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 key=f"layer{i}_attn+mlp",
                 snap_fn=self.snap_fn,
                 num_codebooks=self.config.num_codebooks,
+                kmeans_init=self.config.kmeans_init,
+                kmeans_kwargs=self.config.kmeans_kwargs,
             )
         )
         self.codebook_params += list(
@@ -1271,12 +1337,26 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.model.eval()
         self.disable_codebooks()
 
-        for data in tqdm(dataloader):
-            input_ids = data["input_ids"].to(self.device)
-            data["attention_mask"].to(self.device)
-            self.model.embed_in(input_ids)
+        # enable loading data for kmeans initialization
+        for codebooks in self.all_codebook_wrappers.values():
+            for codebook in codebooks:
+                codebook.store_data()
 
-        pass
+        # load data and fit kmeans model
+        for data in tqdm(dataloader):
+            self.model(**data)
+            self.partial_fit_codebook()
+
+        # disable loading data and initialize codebook weights
+        for codebooks in self.all_codebook_wrappers.values():
+            for codebook in codebooks:
+                codebook.initialize_codebooks()
+
+    def partial_fit_codebook(self):
+        """Fits the codebook to the data stored in the codebook layer."""
+        for codebooks in self.all_codebooks.values():
+            for codebook in codebooks:
+                codebook.partial_fit_codebook()
 
     @abc.abstractmethod
     def itermediate_size(self):
