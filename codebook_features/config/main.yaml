@@ -25,19 +25,19 @@ training_args:
 
   train_model_params: True
   model_lr_factor: 0.1
-  loss: base
+  loss: aeloss
   codebook_reg_p: null
   codebook_weight_decay: 0.01
 
 pretrained_path: null
 get_baseline: False
 codebook_type: vanilla
-codebook_size: 1000
+codebook_size: 10000
 layers_to_snap: all
-similarity_metric: euclidean
+similarity_metric: inner_product
 codebook_at: attention
 num_compositional_codebooks: 1
-k_codebook: 3
+k_codebook: 100
 kmeans_init: False
 tag_keys: []
 tags: []
