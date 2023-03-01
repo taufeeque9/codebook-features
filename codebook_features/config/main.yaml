@@ -36,9 +36,10 @@ codebook_size: 10000
 layers_to_snap: all
 similarity_metric: inner_product
 codebook_at: attention
-num_compositional_codebooks: 1
+num_codebooks: 1
 k_codebook: 100
 kmeans_init: False
+kmeans_path: path: /data/.cache/huggingface/kmeans_embeddings.pt
 kmeans_kwargs:
   batch_size: 24576
 tag_keys: []

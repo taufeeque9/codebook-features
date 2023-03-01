@@ -1,6 +1,7 @@
 """Model related classes."""
 
 import abc
+import os
 from collections import Counter
 from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 
@@ -1025,6 +1026,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         loss: str = "base",
         k_codebook: int = 1,
         kmeans_init: bool = False,
+        kmeans_path: str = None,
         kmeans_kwargs: dict = {},
         **kwargs,
     ) -> None:
@@ -1063,6 +1065,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         self.loss = loss
         self.k_codebook = k_codebook
         self.kmeans_init = kmeans_init
+        self.kmeans_path = kmeans_path
         self.kmeans_kwargs = kmeans_kwargs
 
 
@@ -1285,14 +1288,14 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def enable_codebooks(self):
         """Enable the use of codebooks in all the layers to snap."""
-        for i, layers in self.all_codebooks.items():
+        for i, layers in self.all_codebook_wrappers.items():
             assert i in self.config.layers_to_snap
             for layer in layers:
                 layer.snap = True
 
     def disable_codebooks(self):
         """Disable the use of codebooks in all the layers."""
-        for i, layers in self.all_codebooks.items():
+        for i, layers in self.all_codebook_wrappers.items():
             assert i in self.config.layers_to_snap
             for layer in layers:
                 layer.snap = False
@@ -1335,11 +1338,30 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         """Gets input embeddings of the model."""
         return self.model.get_input_embeddings()
 
+    def save_kmeans_embeddings(self, path):
+        """Saves kmeans embeddings to a file."""
+        state_dict = self.state_dict()
+        state_dict = {k: v for k, v in state_dict.items() if "codebook_layer" in k}
+        torch.save(state_dict, path)
+
+    def load_kmeans_embeddings(self, path):
+        """Loads kmeans embeddings from a file."""
+        state_dict = torch.load(path)
+        missing, unexpected = self.load_state_dict(state_dict, strict=False)
+        missing = [k for k in missing if "codebook_layer" in k]
+        assert len(unexpected) == 0 and len(missing) == 0
+
     def init_codebook(self, dataloader):
+        """Initializes the codebook weights using kmeans."""
+        # check if `kmeans_path` exists and load kmeans embeddings
+        if self.config.kmeans_path and os.path.exists(self.config.kmeans_path):
+            self.load_kmeans_embeddings(self.config.kmeans_path)
+            return
+
         self.model.eval()
         self.disable_codebooks()
 
-        # enable loading data for kmeans initialization
+        # enable loading training data for kmeans initialization
         for codebooks in self.all_codebook_wrappers.values():
             for codebook in codebooks:
                 codebook.store_data()
@@ -1354,6 +1376,11 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         for codebooks in self.all_codebook_wrappers.values():
             for codebook in codebooks:
                 codebook.initialize_codebooks()
+
+        if self.config.kmeans_path and not os.path.exists(self.config.kmeans_path):
+            self.save_kmeans_embeddings(self.config.kmeans_path)
+
+        self.enable_codebooks()
 
     def partial_fit_codebook(self):
         """Fits the codebook to the data stored in the codebook layer."""

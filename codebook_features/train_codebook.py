@@ -117,6 +117,7 @@ def main(cfg):
         loss=training_args.loss,
         k_codebook=cfg.k_codebook,
         kmeans_init=cfg.kmeans_init,
+        kmeans_path=cfg.kmeans_path,
         kmeans_kwargs=cfg_dict["kmeans_kwargs"],
     )
     model = models.wrap_codebook(
@@ -163,6 +164,7 @@ def main(cfg):
     if codebook_config.kmeans_init and training_args.local_rank <= 0:
         model.init_codebook(trainer.get_train_dataloader())
 
+    model.enable_codebooks()
     metrics = run_clm.run_trainer(
         model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
     )
