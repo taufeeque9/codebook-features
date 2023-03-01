@@ -105,7 +105,7 @@ def main(cfg):
                 baseline_metrics = json.load(f)
         except FileNotFoundError:
             baseline_metrics = {}
-    if training_args.local_rank == 0:
+    if training_args.local_rank <= 0:
         wandb.log(baseline_metrics, commit=False)
     codebook_config = models.CodebookModelConfig(
         codebook_type=cfg.codebook_type,
@@ -160,7 +160,7 @@ def main(cfg):
         callbacks=[cb_trainer.WandbCallback()],
     )
 
-    if codebook_config.kmeans_init:
+    if codebook_config.kmeans_init and training_args.local_rank <= 0:
         model.init_codebook(trainer.get_train_dataloader())
 
     metrics = run_clm.run_trainer(

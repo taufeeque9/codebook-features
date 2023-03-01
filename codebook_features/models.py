@@ -95,7 +95,9 @@ class KmeansEmbedding(nn.Embedding):
         ----
             k: number of cluster centers for K-Means.
         """
-        self._weight = torch.from_numpy(self.kmeans.cluster_centers_)
+        self.weight.data = torch.from_numpy(self.kmeans.cluster_centers_).to(
+            self.weight.device
+        )
         self.clear_data()
 
 
@@ -1344,6 +1346,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
         # load data and fit kmeans model
         for data in tqdm(dataloader):
+            data = {k: v.to(self.device) for k, v in data.items()}
             self.model(**data)
             self.partial_fit_codebook()
 
