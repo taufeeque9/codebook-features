@@ -1026,6 +1026,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         loss: str = "base",
         k_codebook: int = 1,
         kmeans_init: bool = False,
+        kmeans_init_examples: int = 1000,
         kmeans_path: str = None,
         kmeans_kwargs: dict = {},
         **kwargs,
@@ -1066,6 +1067,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         self.k_codebook = k_codebook
         self.kmeans_init = kmeans_init
         self.kmeans_path = kmeans_path
+        self.kmeans_init_examples = kmeans_init_examples
         self.kmeans_kwargs = kmeans_kwargs
 
 
@@ -1369,7 +1371,11 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 codebook.store_data()
 
         # load data and fit kmeans model
+        examples = 0
         for data in tqdm(dataloader):
+            if examples >= self.config.kmeans_init_examples:
+                break
+            examples += data["input_ids"].shape[0]
             data = {k: v.to(self.device) for k, v in data.items()}
             self.model(**data)
             self.partial_fit_codebook()
