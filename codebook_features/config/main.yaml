@@ -41,6 +41,7 @@ k_codebook: 100
 kmeans_init: False
 kmeans_path: path: /data/.cache/huggingface/kmeans_embeddings.pt
 kmeans_kwargs:
+  n_init: auto
   batch_size: 24576
 tag_keys: []
 tags: []

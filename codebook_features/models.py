@@ -1358,6 +1358,8 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             self.load_kmeans_embeddings(self.config.kmeans_path)
             return
 
+        print("Running kmeans initialization for all the codebooks...")
+
         self.model.eval()
         self.disable_codebooks()
 
