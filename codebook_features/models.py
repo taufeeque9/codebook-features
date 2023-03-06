@@ -976,6 +976,7 @@ class MLPWrapper(CodebookWrapper):
         snap_fn: BaseSnapFunction = EuclideanSnapFunction,
         num_codebooks: int = 1,
         hook_fn: Callable = None,
+        **kwargs,
     ):
         """Create the transformer layer wrapped with the codebook.
 
@@ -997,6 +998,7 @@ class MLPWrapper(CodebookWrapper):
             snap_fn=snap_fn,
             num_codebooks=num_codebooks,
             hook_fn=hook_fn,
+            **kwargs,
         )
 
     def forward(self, *args, **kwargs):
@@ -1006,6 +1008,8 @@ class MLPWrapper(CodebookWrapper):
             returns the output of the transformer layer.
         """
         layer_outputs = self.module_layer(*args, **kwargs)
+        if self._store_data:
+            self.codebook_layer.load_data(layer_outputs[0])
         if self.snap:
             layer_outputs = self.codebook_layer(layer_outputs)
 
@@ -1363,6 +1367,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         print("Running kmeans initialization for all the codebooks...")
 
         self.model.eval()
+        self.to(torch.device("cuda"))
         self.disable_codebooks()
 
         # enable loading training data for kmeans initialization

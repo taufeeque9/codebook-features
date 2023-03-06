@@ -107,20 +107,7 @@ def main(cfg):
             baseline_metrics = {}
     if training_args.local_rank <= 0:
         wandb.log(baseline_metrics, commit=False)
-    codebook_config = models.CodebookModelConfig(
-        codebook_type=cfg.codebook_type,
-        num_codes=cfg.codebook_size,
-        num_codebooks=cfg.num_codebooks,
-        layers_to_snap=cfg.layers_to_snap,
-        similarity_metric=cfg.similarity_metric,
-        codebook_at=cfg.codebook_at,
-        loss=training_args.loss,
-        k_codebook=cfg.k_codebook,
-        kmeans_init=cfg.kmeans_init,
-        kmeans_init_examples=cfg.kmeans_init_examples,
-        kmeans_path=cfg.kmeans_path,
-        kmeans_kwargs=cfg_dict["kmeans_kwargs"],
-    )
+    codebook_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
     model = models.wrap_codebook(
         model_or_path=model,
         config=codebook_config,
@@ -153,13 +140,20 @@ def main(cfg):
         RuntimeWarning("Codebook not found in model. Training with model params.")
         optimizer = None
 
+    callbacks = [cb_trainer.WandbCallback()]
+    if cfg.k_scheduler_kwargs is not None:
+        k_scheduler = cb_trainer.MulticodeKScheduler(
+            k_min=cfg.codebook_args.k_codebook, **cfg.k_scheduler_kwargs
+        )
+        callbacks.append(k_scheduler)
+
     trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
         model_args,
         data_args,
         training_args,
         model,
         optimizers=(optimizer, None),
-        callbacks=[cb_trainer.WandbCallback()],
+        callbacks=callbacks,
     )
 
     if codebook_config.kmeans_init and training_args.local_rank <= 0:

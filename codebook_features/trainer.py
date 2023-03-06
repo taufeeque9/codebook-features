@@ -74,6 +74,8 @@ class CodebookTrainer(transformers.Trainer):
 
         if isinstance(self.model, models.CodebookModel):
 
+            logs[metric_prefix + "multicode_k"] = models.BaseSnapFunction.k
+
             all_codebooks = self.model.all_codebooks
             overall_dead_code_count, dead_code_count, total_codes = 0, 0, 0
             max_norm, mean_norm = 0, 0
@@ -204,3 +206,30 @@ class MultiOptimizer(torch.optim.Optimizer):
         for optimizer in self.optimizers:
             param_grps.extend(optimizer.param_groups)
         return param_grps
+
+
+class MulticodeKScheduler(transformers.TrainerCallback):
+    def __init__(self, k_max, k_min, decay_steps):
+        self.k_max = k_max
+        self.k_min = k_min
+        self.decay_steps = decay_steps
+
+    def k_scheduler(self, step):
+        return int(
+            self.k_max - (self.k_max - self.k_min) * min(1, step / self.decay_steps)
+        )
+
+    def on_step_begin(
+        self,
+        args: transformers.TrainingArguments,
+        state: transformers.TrainerState,
+        control: transformers.TrainerControl,
+        **kwargs,
+    ):
+        models.BaseSnapFunction.k = self.k_scheduler(state.global_step)
+
+    def on_train_begin(self, *args, **kwargs):
+        models.BaseSnapFunction.k = self.k_max
+
+    def on_train_end(self, *args, **kwargs):
+        models.BaseSnapFunction.k = self.k_min
