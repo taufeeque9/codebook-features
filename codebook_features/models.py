@@ -162,7 +162,7 @@ class BaseSnapFunction(torch.autograd.Function):
 
             grad_codebook += grad_codebook_mse
             # straight through estimator
-            grad_inputs = grad_outputs + 2 * (inputs - outputs)
+            grad_inputs = grad_outputs + 2 * beta * (inputs - outputs)
 
         return grad_inputs, grad_codebook
 
@@ -1009,7 +1009,7 @@ class MLPWrapper(CodebookWrapper):
         """
         layer_outputs = self.module_layer(*args, **kwargs)
         if self._store_data:
-            self.codebook_layer.load_data(layer_outputs[0])
+            self.codebook_layer.load_data(layer_outputs)
         if self.snap:
             layer_outputs = self.codebook_layer(layer_outputs)
 

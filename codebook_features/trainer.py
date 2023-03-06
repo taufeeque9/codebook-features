@@ -212,7 +212,7 @@ class MulticodeKScheduler(transformers.TrainerCallback):
     def __init__(self, k_max, k_min, decay_steps):
         self.k_max = k_max
         self.k_min = k_min
-        self.decay_steps = decay_steps
+        self.decay_steps = decay_steps - 1
 
     def k_scheduler(self, step):
         return int(

@@ -19,7 +19,7 @@ shortened_args = {
     "learning_rate": "lr",
     "per_device_train_batch_size": "bs",
     "codebook_type": "cbt",
-    "codebook_size": "cbs",
+    "num_codes": "cbs",
     "num_codebooks": "ncb",
     "layers_to_snap": "cb_layers",
     "similarity_metric": "sim",
