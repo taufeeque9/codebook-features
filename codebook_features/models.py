@@ -286,6 +286,7 @@ class CodebookLayer(nn.Module):
         hook_fn: Callable = None,
         kmeans_init=False,
         kmeans_kwargs: dict = {},
+        **kwargs,
     ):
         """Create the codebook layer.
 
@@ -601,8 +602,8 @@ class CompositionalCodebookLayer(nn.Module):
         self.codebook = nn.ModuleList(
             [
                 CodebookLayer(
-                    dim // num_codebooks,
-                    num_codes,
+                    dim=dim // num_codebooks,
+                    num_codes=num_codes,
                     key=key + f"_ccb{i}",
                     kmeans_init=kmeans_init,
                     soft_snap=soft_snap,
@@ -735,8 +736,8 @@ class GroupedCodebookLayer(nn.Module):
         self.codebook = nn.ModuleList(
             [
                 CodebookLayer(
-                    dim,
-                    num_codes // num_codebooks,
+                    dim=dim,
+                    num_codes=num_codes // num_codebooks,
                     key=key + f"_gcb{i}",
                     kmeans_init=kmeans_init,
                     soft_snap=soft_snap,
@@ -1026,7 +1027,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         num_codebooks: int = 1,
         layers_to_snap: Sequence = (),
         similarity_metric: str = "euclidean",
-        codebook_at: str = "mlp",
+        codebook_at: Union[str, Sequence] = "mlp",
         loss: str = "base",
         k_codebook: int = 1,
         kmeans_init: bool = False,
@@ -1241,49 +1242,46 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         codebooks_in_layer.append(wrapped_attn)
 
     def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer):
-        codebooks_in_layer.append(
-            self.codebook_cls(
-                dim=self.model.config.hidden_size,
-                num_codes=self.config.num_codes,
-                key=f"layer{i}_attn_preproj",
-                snap_fn=self.snap_fn,
-                num_codebooks=self.config.num_codebooks,
-                kmeans_init=self.config.kmeans_init,
-                kmeans_kwargs=self.config.kmeans_kwargs,
-            )
+        codebook = self.codebook_cls(
+            dim=self.model.config.hidden_size,
+            num_codes=self.config.num_codes,
+            key=f"layer{i}_attn_preproj",
+            snap_fn=self.snap_fn,
+            num_codebooks=self.config.num_codebooks,
+            kmeans_init=self.config.kmeans_init,
+            kmeans_kwargs=self.config.kmeans_kwargs,
         )
-        self.codebook_params += list(
-            codebooks_in_layer[-1].parameters(),
-        )
-        layers[i].__setattr__(
-            self.attention_key,
-            self.pre_projection_attn_codebook_cls(
-                self.model.config,
-                i,
-                codebooks_in_layer[-1],
-            ),
-        )
-
-    def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer):
-        codebooks_in_layer.append(
-            self.codebook_cls(
-                dim=self.model.config.hidden_size,
-                num_codes=self.config.num_codes,
-                key=f"layer{i}_attn+mlp",
-                snap_fn=self.snap_fn,
-                num_codebooks=self.config.num_codebooks,
-                kmeans_init=self.config.kmeans_init,
-                kmeans_kwargs=self.config.kmeans_kwargs,
-            )
-        )
-        self.codebook_params += list(
-            codebooks_in_layer[-1].parameters(),
-        )
-        layers[i] = self.pre_residual_codebook_cls(
+        new_block = self.pre_projection_attn_codebook_cls(
             self.model.config,
             i,
-            codebooks_in_layer[-1],
+            codebook,
         )
+        codebooks_in_layer.append(new_block)
+        self.codebook_params += list(codebook.parameters())
+        new_block.load_state_dict(
+            layers[i].__getattr__(self.attention_key).state_dict(), strict=False
+        )
+        layers[i].__setattr__(self.attention_key, new_block)
+
+    def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer):
+        codebook = self.codebook_cls(
+            dim=self.model.config.hidden_size,
+            num_codes=self.config.num_codes,
+            key=f"layer{i}_attn+mlp",
+            snap_fn=self.snap_fn,
+            num_codebooks=self.config.num_codebooks,
+            kmeans_init=self.config.kmeans_init,
+            kmeans_kwargs=self.config.kmeans_kwargs,
+        )
+        pre_res_block = self.pre_residual_codebook_cls(
+            self.model.config,
+            i,
+            codebook,
+        )
+        codebooks_in_layer.append(pre_res_block)
+        self.codebook_params += list(codebook.parameters())
+        pre_res_block.load_state_dict(layers[i].state_dict(), strict=False)
+        layers[i] = pre_res_block
 
     def reset_codebook_metrics(self):
         """Resets the metrics stored of the codebooks."""
