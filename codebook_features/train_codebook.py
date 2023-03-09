@@ -11,18 +11,20 @@ import torch
 import transformers
 
 import wandb
-from codebook_features import models, run_clm, trainer
+from codebook_features import models, run_clm
+from codebook_features import trainer as cb_trainer
 
 shortened_args = {
     "model_name_or_path": "mod",
     "learning_rate": "lr",
     "per_device_train_batch_size": "bs",
-    "codebook_size": "cbs",
-    "num_compositional_codebooks": "nccb",
+    "codebook_type": "cbt",
+    "num_codes": "cbs",
+    "num_codebooks": "ncb",
     "layers_to_snap": "cb_layers",
     "similarity_metric": "sim",
     "codebook_at": "cb_at",
-    "vqvae_loss": "vqvae",
+    "loss": "loss",
     "train_model_params": "train_mod",
     "model_lr_factor": "mod_lrf",
     "k_codebook": "k",
@@ -103,25 +105,15 @@ def main(cfg):
                 baseline_metrics = json.load(f)
         except FileNotFoundError:
             baseline_metrics = {}
-    if training_args.local_rank == 0:
+    if training_args.local_rank <= 0:
         wandb.log(baseline_metrics, commit=False)
-    codebook_config = models.CodebookModelConfig(
-        num_codes=cfg.codebook_size,
-        num_codebooks=cfg.num_compositional_codebooks,
-        layers_to_snap=cfg.layers_to_snap,
-        similarity_metric=cfg.similarity_metric,
-        codebook_at=cfg.codebook_at,
-        vqvae_loss=training_args.vqvae_loss,
-        k_codebook=cfg.k_codebook,
-    )
+    codebook_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
     model = models.wrap_codebook(
         model_or_path=model,
         config=codebook_config,
         pretrained_path=cfg.pretrained_path,
     )
     if training_args.train_model_params:
-        # model.unfreeze_model_params()
-        # params = list(model.parameters())
         params = [
             {
                 "params": model.get_codebook_params(),
@@ -138,7 +130,6 @@ def main(cfg):
             },
         ]
     else:
-        # model.freeze_model_params()
         params = model.get_codebook_params()
     if len(params) > 0:
         optimizer = torch.optim.AdamW(
@@ -149,14 +140,30 @@ def main(cfg):
         RuntimeWarning("Codebook not found in model. Training with model params.")
         optimizer = None
 
-    metrics = run_clm.main(
+    callbacks = [cb_trainer.WandbCallback()]
+    if cfg.k_scheduler_kwargs is not None:
+        k_scheduler = cb_trainer.MulticodeKScheduler(
+            k_min=cfg.codebook_args.k_codebook, **cfg.k_scheduler_kwargs
+        )
+        callbacks.append(k_scheduler)
+
+    trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
         model_args,
         data_args,
-        training_args=training_args,
-        model=model,
+        training_args,
+        model,
         optimizers=(optimizer, None),
-        callbacks=[trainer.WandbCallback()],
+        callbacks=callbacks,
     )
+
+    if codebook_config.kmeans_init and training_args.local_rank <= 0:
+        model.init_codebook(trainer.get_train_dataloader())
+
+    model.enable_codebooks()
+    metrics = run_clm.run_trainer(
+        model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
+    )
+
     return metrics, baseline_metrics
 
 

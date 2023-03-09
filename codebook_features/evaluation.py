@@ -1,9 +1,9 @@
 """evaluation related functions."""
 import dataclasses
+import pickle
 from datetime import datetime
 
 import numpy as np
-import transformers
 
 from codebook_features import run_clm
 
@@ -12,11 +12,10 @@ def evaluate(model, model_args, data_args, eval_on="train"):
     """Evaluate a model on a dataset."""
     output_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    training_args = transformers.TrainingArguments(output_dir=output_dir)
+    training_args = run_clm.TrainingArguments(output_dir=output_dir)
     eval_args = dataclasses.replace(
         training_args,
-        output_dir=training_args.output_dir,
-        do_train=False,
+        do_train=True,
         do_eval=True,
         report_to="none",
         per_device_eval_batch_size=32,
@@ -36,14 +35,15 @@ def evaluate(model, model_args, data_args, eval_on="train"):
         training_args=eval_args,
         model=model,
     )
-    dataset = dataset[eval_on]
+    dataset = trainer.train_dataset if eval_on == "train" else trainer.eval_dataset
     tokens = dataset["input_ids"]
     metrics = trainer.evaluate(eval_dataset=dataset)
     for k, v in codebook_acts.items():
         codebook_acts[k] = np.concatenate(v, axis=0)
 
     np.save(f"{output_dir}/tokens.npy", tokens)
-    np.save(f"{output_dir}/cb_acts.npy", codebook_acts)
+    with open(f"{output_dir}/cb_acts.pkl", "wb") as f:
+        pickle.dump(codebook_acts, f)
     np.save(f"{output_dir}/metrics.npy", metrics)
 
     return tokens, codebook_acts, metrics

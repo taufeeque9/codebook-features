@@ -68,3 +68,12 @@ def test_evaluate():
         assert len(v) == len(tokens)
     assert metrics is not None
 
+def test_hooked_transformer_codebook_model():
+    config = models.CodebookModelConfig(layers_to_snap='all')
+    model_path = "EleutherAI/pythia-70m-deduped"
+    model_args = run_clm.ModelArguments(model_name_or_path=model_path)
+    model = models.wrap_codebook(
+        model_or_path=model_args.model_name_or_path, config=config
+    )
+    hooked_model = models.convert_to_hooked_model(model_path, model)
+    assert hooked_model is not None
