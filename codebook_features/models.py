@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 
 import numpy as np
 import torch
+import transformer_lens
 import transformers
 from sklearn import cluster as sklearn_cluster
 from torch import nn
@@ -901,6 +902,13 @@ class CodebookWrapper(nn.Module, abc.ABC):
         self.codebook_layer.initialize()
         self._store_data = False
 
+    def __getattr__(self, name):
+        """Get attribute from the wrapped module."""
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.module_layer, name)
+
 
 class TransformerLayerWrapper(CodebookWrapper):
     """Wraps a transformer layer module by applying codebooks on the output of the layer."""
@@ -1173,7 +1181,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         layers[i] = TransformerLayerWrapper(
             layers[i],
             codebook_cls=self.codebook_cls,
-            dim=self.model.config.hidden_size,
+            dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_tb",
             snap_fn=self.snap_fn,
@@ -1190,7 +1198,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         wrapped_mlp = MLPWrapper(
             layers[i].__getattr__(self.mlp_key),
             codebook_cls=self.codebook_cls,
-            dim=self.model.config.hidden_size,
+            dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_mlp",
             snap_fn=self.snap_fn,
@@ -1227,7 +1235,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         wrapped_attn = TransformerLayerWrapper(
             layers[i].__getattr__(self.attention_key),
             codebook_cls=self.codebook_cls,
-            dim=self.model.config.hidden_size,
+            dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_attn",
             snap_fn=self.snap_fn,
@@ -1243,7 +1251,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer):
         codebook = self.codebook_cls(
-            dim=self.model.config.hidden_size,
+            dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_attn_preproj",
             snap_fn=self.snap_fn,
@@ -1252,7 +1260,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_kwargs=self.config.kmeans_kwargs,
         )
         new_block = self.pre_projection_attn_codebook_cls(
-            self.model.config,
+            self.base_model_cfg(),
             i,
             codebook,
         )
@@ -1265,7 +1273,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer):
         codebook = self.codebook_cls(
-            dim=self.model.config.hidden_size,
+            dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_attn+mlp",
             snap_fn=self.snap_fn,
@@ -1274,7 +1282,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_kwargs=self.config.kmeans_kwargs,
         )
         pre_res_block = self.pre_residual_codebook_cls(
-            self.model.config,
+            self.base_model_cfg(),
             i,
             codebook,
         )
@@ -1326,10 +1334,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             for layer in layers:
                 triggered_codes.append(layer.get_triggered_codes())
         triggered_codes = torch.cat(triggered_codes, dim=0)
-        assert (
-            triggered_codes.shape[1] * self.config.num_codebooks
-            == self.model.config.hidden_size
-        )
+        assert triggered_codes.shape[1] * self.config.num_codebooks == self.d_model
         return triggered_codes
 
     def codebook_regularization(self, p=1):
@@ -1410,6 +1415,12 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         """Returns the key of layer in MLP layer where codebook is to be applied."""
         pass
 
+    @property
+    @abc.abstractmethod
+    def d_model(self):
+        """Returns the dimension of the model."""
+        pass
+
     @abc.abstractmethod
     def layers(self):
         """Returns the list of transformer layers of the model."""
@@ -1418,6 +1429,11 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     @abc.abstractmethod
     def num_layers(self):
         """Returns the number of transformer layers in the model."""
+        pass
+
+    @abc.abstractmethod
+    def base_model_cfg(self):
+        """Returns the base model config."""
         pass
 
 
@@ -1452,7 +1468,7 @@ class BertCodebookModel(CodebookModel):
 
     def num_layers(self):
         """Returns the number of transformer layers in the model."""
-        return self.model.config.num_hidden_layers
+        return self.base_model_cfg().num_hidden_layers
 
 
 class GPT2CodebookModel(CodebookModel):
@@ -1505,7 +1521,7 @@ class GPT2CodebookModel(CodebookModel):
         if self.model.config.n_inner is not None:
             return self.model.config.n_inner
         else:
-            return 4 * self.model.config.hidden_size
+            return 4 * self.d_model
 
     @property
     def attention_key(self):
@@ -1536,6 +1552,15 @@ class GPT2CodebookModel(CodebookModel):
     def num_heads(self):
         """Returns the number of heads in the model."""
         return self.model.config.n_head
+
+    @property
+    def d_model(self):
+        """Returns the dimension of the model."""
+        return self.model.config.hidden_size
+
+    def base_model_cfg(self):
+        """Returns the base model config."""
+        return self.model.config
 
 
 class GPTNeoXCodebookModel(CodebookModel):
@@ -1616,6 +1641,103 @@ class GPTNeoXCodebookModel(CodebookModel):
         """Returns the number of heads in the model."""
         return self.model.config.num_attention_heads
 
+    @property
+    def d_model(self):
+        """Returns the dimension of the model."""
+        return self.model.config.hidden_size
+
+    def base_model_cfg(self):
+        """Returns the base model config."""
+        return self.model.config
+
+
+class HookedTransformerCodebookModel(CodebookModel):
+    """Codebook model for HookedTransformer."""
+
+    def __init__(
+        self,
+        config,
+        model,
+    ):
+        """Build the codebook based model.
+
+        Args:
+        ----
+            config: config for the model.
+            model: GPT2 model to apply codebooks to.
+        """
+        super().__init__(
+            config=config,
+            model=model,
+        )
+        self.add_codebooks()
+        self.forward = self.model.forward
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "model":
+            self.forward = self.model.forward
+
+    def forward(self, *args, labels: Optional[torch.LongTensor] = None, **kwargs):
+        raise RuntimeError(
+            "This shouldn't get executed as forward is overridden in init."
+        )
+
+    def layers(self):
+        """Returns the list of transformer layers of the model."""
+        return self.model.blocks
+
+    def num_layers(self):
+        """Returns the number of transformer layers in the model."""
+        return self.model.cfg.n_layers
+
+    def resize_token_embeddings(self, new_num_tokens):
+        """Resizes token embeddings of the model."""
+        raise NotImplementedError("Not implemented for HookedTransformer.")
+
+    def itermediate_size(self):
+        """Returns the intermediate size of the model."""
+        return self.model.cfg.d_mlp
+
+    @property
+    def attention_key(self):
+        """Returns the attribute name used for attention in the model."""
+        return "attn"
+
+    @property
+    def mlp_key(self):
+        """Returns the attribute name used for mlp in the model."""
+        return "mlp"
+
+    @property
+    def mlp_mid_key(self):
+        """Returns the attribute name used for mlp hidden layer in the model."""
+        return "act_fn"
+
+    @property
+    def pre_projection_attn_codebook_cls(self):
+        """Returns the class to use for applying codebook to attention before projection."""
+        raise NotImplementedError("Not implemented for HookedTransformer.")
+
+    @property
+    def pre_residual_codebook_cls(self):
+        """Returns the class to use for codebook before residual."""
+        raise NotImplementedError("Not implemented for HookedTransformer.")
+
+    @property
+    def num_heads(self):
+        """Returns the number of heads in the model."""
+        return self.model.cfg.n_heads
+
+    @property
+    def d_model(self):
+        """Returns the dimension of the model."""
+        return self.model.cfg.d_model
+
+    def base_model_cfg(self):
+        """Returns the base model config."""
+        return self.model.cfg
+
 
 def wrap_codebook(model_or_path, config=None, pretrained_path=None):
     """Wraps a model with codebooks."""
@@ -1651,3 +1773,52 @@ def wrap_codebook(model_or_path, config=None, pretrained_path=None):
         raise ValueError(
             f"Model type {model.config.model_type} not supported with codebooks."
         )
+
+
+def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs={}):
+    """Wraps a hooked tranformer model with codebooks."""
+    model = transformer_lens.HookedTransformer.from_pretrained(
+        model_path,
+        # center_unembed=True,
+        # center_writing_weights=True,
+        # fold_ln=True,
+        # refactor_factored_attn_matrices=True,
+    )
+    state_dict = convert_state_dict(orig_cb_model.model, model.cfg)
+    model.load_and_process_state_dict(
+        state_dict,
+        **hooked_kwargs,
+    )
+    cb_model = HookedTransformerCodebookModel(orig_cb_model.config, model)
+    cb_sd = {}
+    import re
+
+    for key, value in orig_cb_model.model.state_dict().items():
+        if "codebook" in key:
+            split_key = re.split(r"(\d+)", key)
+            split_key[0] = "blocks."
+            cb_sd["".join(split_key)] = value
+    _, unexpected = cb_model.model.load_state_dict(cb_sd, strict=False)
+    assert len(unexpected) == 0
+    return cb_model
+
+
+def convert_state_dict(model, cfg: transformer_lens.HookedTransformerConfig):
+    """Converts a state_dict from a HuggingFace model to a state_dict
+    compatible with HookedTransformer."""
+    if cfg.original_architecture == "GPT2LMHeadModel":
+        return transformer_lens.loading.convert_gpt2_weights(model, cfg)
+    elif cfg.original_architecture == "GPTNeoForCausalLM":
+        return transformer_lens.loading.convert_neo_weights(model, cfg)
+    elif cfg.original_architecture == "GPTJForCausalLM":
+        return transformer_lens.loading.convert_gptj_weights(model, cfg)
+    elif cfg.original_architecture == "GPTNeoXForCausalLM":
+        return transformer_lens.loading.convert_neox_weights(model, cfg)
+    elif cfg.original_architecture == "OPTForCausalLM":
+        return transformer_lens.loading.convert_opt_weights(model, cfg)
+    elif cfg.original_architecture == "neel-solu-old":
+        return transformer_lens.loading.convert_neel_solu_old_weights(model, cfg)
+    elif cfg.original_architecture == "neel":
+        return model.state_dict()
+    else:
+        raise ValueError(f"Unknown architecture {cfg.original_architecture}")
