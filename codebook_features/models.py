@@ -1795,6 +1795,8 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs={}):
 
     for key, value in orig_cb_model.model.state_dict().items():
         if "codebook" in key:
+            key = key.replace(orig_cb_model.attention_key, cb_model.attention_key)
+            key = key.replace(orig_cb_model.mlp_key, cb_model.mlp_key)
             split_key = re.split(r"(\d+)", key)
             split_key[0] = "blocks."
             cb_sd["".join(split_key)] = value
