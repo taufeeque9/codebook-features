@@ -70,7 +70,9 @@ def test_evaluate():
 
 
 def test_hooked_transformer_codebook_model():
-    config = models.CodebookModelConfig(layers_to_snap='all')
+    config = models.CodebookModelConfig(
+        layers_to_snap="all", codebook_at="attention", codebook_type="compositional"
+    )
     model_path = "EleutherAI/pythia-70m-deduped"
     model_args = run_clm.ModelArguments(model_name_or_path=model_path)
     model = models.wrap_codebook(
