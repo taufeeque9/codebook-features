@@ -959,11 +959,17 @@ class TransformerLayerWrapper(CodebookWrapper):
             returns the output of the transformer layer.
         """
         layer_outputs = self.module_layer(*args, **kwargs)
+        tensor_output = layer_outputs
+        if isinstance(layer_outputs, tuple):
+            tensor_output = layer_outputs[0]
         if self._store_data:
-            self.codebook_layer.load_data(layer_outputs[0])
+            self.codebook_layer.load_data(tensor_output)
         if self.snap:
-            snapped_output = self.codebook_layer(layer_outputs[0])
-            layer_outputs = (snapped_output, *layer_outputs[1:])
+            tensor_output = self.codebook_layer(tensor_output)
+            if isinstance(layer_outputs, tuple):
+                layer_outputs = (tensor_output, *layer_outputs[1:])
+            else:
+                layer_outputs = tensor_output
 
         return layer_outputs
 
@@ -1733,6 +1739,10 @@ class HookedTransformerCodebookModel(CodebookModel):
     def d_model(self):
         """Returns the dimension of the model."""
         return self.model.cfg.d_model
+
+    @property
+    def device(self):
+        return self.model.cfg.device
 
     def base_model_cfg(self):
         """Returns the base model config."""

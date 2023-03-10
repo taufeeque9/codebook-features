@@ -78,5 +78,14 @@ def test_hooked_transformer_codebook_model():
     model = models.wrap_codebook(
         model_or_path=model_args.model_name_or_path, config=config
     )
-    hooked_model = models.convert_to_hooked_model(model_path, model)
-    assert hooked_model is not None
+    hooked_model = models.convert_to_hooked_model(
+        model_path=model_path,
+        orig_cb_model=model,
+        hooked_kwargs={"center_writing_weights": False, "center_unembed": False},
+    )
+    sentence = "this is a random sentence to test."
+    input = hooked_model.model.tokenizer(sentence, return_tensors="pt")["input_ids"]
+    output = model(input)["logits"]
+    hooked_output = hooked_model(input)
+
+    assert torch.allclose(output, hooked_output)
