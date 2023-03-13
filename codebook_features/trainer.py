@@ -91,6 +91,12 @@ class CodebookTrainer(transformers.Trainer):
                     logs[metric_prefix + f"MSE/layer{codebook_idx}"] = sum(
                         codebook.reconstruction_mse for codebook in codebooks
                     ) / len(codebooks)
+                    logs[metric_prefix + f"input_norm/layer{codebook_idx}"] = sum(
+                        codebook.input_norm for codebook in codebooks
+                    ) / len(codebooks)
+                    logs[metric_prefix + f"output_norm/layer{codebook_idx}"] = sum(
+                        codebook.output_norm for codebook in codebooks
+                    ) / len(codebooks)
                     layer_mean_norm = sum(
                         codebook.avg_norm() for codebook in codebooks
                     ) / len(codebooks)
@@ -121,6 +127,14 @@ class CodebookTrainer(transformers.Trainer):
                 )
                 logs[metric_prefix + "MSE"] = sum(
                     logs[metric_prefix + f"MSE/layer{codebook_idx}"]
+                    for codebook_idx in all_codebooks
+                ) / len(all_codebooks)
+                logs[metric_prefix + "input_norm"] = sum(
+                    logs[metric_prefix + f"input_norm/layer{codebook_idx}"]
+                    for codebook_idx in all_codebooks
+                ) / len(all_codebooks)
+                logs[metric_prefix + "output_norm"] = sum(
+                    logs[metric_prefix + f"output_norm/layer{codebook_idx}"]
                     for codebook_idx in all_codebooks
                 ) / len(all_codebooks)
                 if metric_prefix != "eval_":

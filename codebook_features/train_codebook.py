@@ -41,10 +41,14 @@ def main(cfg):
 
     Returns: tuple of metrics for trained model and the baseline metrics.
     """
+    print(cfg)
     training_args = run_clm.TrainingArguments(**cfg.training_args)
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
     training_args.local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if model_args.cache_dir:
+        training_args.output_dir = model_args.cache_dir + "/" + training_args.output_dir
+        model_args.cache_dir += "/" + "huggingface"
 
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
     # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
@@ -86,27 +90,20 @@ def main(cfg):
         eval_args = dataclasses.replace(
             training_args,
             output_dir=baseline_output_dir,
-            do_train=False,
-            do_eval=True,
-            report_to="none",
         )
-        baseline_metrics = run_clm.main(
+        trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
             model_args,
             data_args,
-            training_args=eval_args,
-            model=model,
+            eval_args,
+            model,
+        )
+        baseline_metrics = run_clm.run_trainer(
+            model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
         )
         baseline_metrics = {"baseline/" + k: v for k, v in baseline_metrics.items()}
         with open(baseline_output_dir + "/metrics.json", "w") as f:
             json.dump(baseline_metrics, f)
-    else:
-        try:
-            with open(baseline_output_dir + "/metrics.json", "r") as f:
-                baseline_metrics = json.load(f)
-        except FileNotFoundError:
-            baseline_metrics = {}
-    if training_args.local_rank <= 0:
-        wandb.log(baseline_metrics, commit=False)
+        return baseline_metrics
     codebook_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
     model = models.wrap_codebook(
         model_or_path=model,
@@ -164,7 +161,7 @@ def main(cfg):
         model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
     )
 
-    return metrics, baseline_metrics
+    return metrics
 
 
 if __name__ == "__main__":

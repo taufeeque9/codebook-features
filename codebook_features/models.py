@@ -314,6 +314,8 @@ class CodebookLayer(nn.Module):
         self.hook_fn = hook_fn
         self.key = key
         self.reconstruction_mse = 0
+        self.input_norm = 0
+        self.output_norm = 0
         self.tokens_processed = 0
 
     @property
@@ -373,6 +375,12 @@ class CodebookLayer(nn.Module):
             coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
             mse = torch.mean(((x - output) ** 2).sum(dim=-1))
             self.reconstruction_mse += coeff * (mse.item() - self.reconstruction_mse)
+            self.input_norm += coeff * (
+                torch.norm(x, dim=-1).mean().item() - self.input_norm
+            )
+            self.output_norm += coeff * (
+                torch.norm(output, dim=-1).mean().item() - self.output_norm
+            )
             self.tokens_processed += x.shape[0] * x.shape[1]
 
             if self.hook_fn is not None:
@@ -401,6 +409,8 @@ class CodebookLayer(nn.Module):
         self.counts.zero_()
         self.reconstruction_mse = 0
         self.tokens_processed = 0
+        self.input_norm = 0
+        self.output_norm = 0
 
     def avg_norm(self):
         """Return the average norm of the codebook features."""
@@ -639,6 +649,20 @@ class CompositionalCodebookLayer(nn.Module):
             self.codebook
         )
 
+    @property
+    def input_norm(self):
+        """Return the input norm of the codebooks."""
+        return sum(codebook.input_norm for codebook in self.codebook) / len(
+            self.codebook
+        )
+
+    @property
+    def output_norm(self):
+        """Return the output norm of the codebooks."""
+        return sum(codebook.output_norm for codebook in self.codebook) / len(
+            self.codebook
+        )
+
     def get_most_used_code(self):
         """Return the most used code. Uses the first codebook by default."""
         return self.codebook[0].get_most_used_code()
@@ -772,6 +796,20 @@ class GroupedCodebookLayer(nn.Module):
     def reconstruction_mse(self):
         """Return the reconstruction mse of the codebooks."""
         return sum(codebook.reconstruction_mse for codebook in self.codebook) / len(
+            self.codebook
+        )
+
+    @property
+    def input_norm(self):
+        """Return the input norm of the codebooks."""
+        return sum(codebook.input_norm for codebook in self.codebook) / len(
+            self.codebook
+        )
+
+    @property
+    def output_norm(self):
+        """Return the output norm of the codebooks."""
+        return sum(codebook.output_norm for codebook in self.codebook) / len(
             self.codebook
         )
 

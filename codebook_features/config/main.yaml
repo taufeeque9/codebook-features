@@ -1,6 +1,6 @@
 model_args:
   model_name_or_path: EleutherAI/pythia-70m-deduped
-  cache_dir: /data/.cache/huggingface/
+  cache_dir: /.cache/cb_volume/
 data_args:
   dataset_name: wikitext
   dataset_config_name: wikitext-103-v1
@@ -38,7 +38,7 @@ codebook_args:
   loss: aeloss
   k_codebook: 100
   kmeans_init: False
-  kmeans_path: /data/.cache/huggingface/kmeans_embeddings.pt
+  kmeans_path: /.cache/cb_volume/huggingface/kmeans_embeddings.pt
   kmeans_init_examples: 1000
   kmeans_kwargs:
     n_init: auto
