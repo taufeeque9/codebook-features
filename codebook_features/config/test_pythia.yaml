@@ -1,5 +1,5 @@
 model_args:
-  model_name_or_path: EleutherAI/pythia-70m-deduped
+  model_name_or_path: taufeeque/tiny-gpt2
 data_args:
   dataset_name: wikitext
   dataset_config_name: wikitext-2-raw-v1
@@ -12,22 +12,29 @@ training_args:
   overwrite_output_dir: True
   do_train: True
   do_eval: True
-  max_steps: 4
-  per_device_train_batch_size: 2
-  per_device_eval_batch_size: 2
+  max_steps: 2
+  save_steps: 100
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  evaluation_strategy: steps
   eval_steps: 1
   logging_steps: 1
   # report_to: wandb
 
+  train_model_params: True
+  model_lr_factor: 0.1
+  loss: aeloss
+  codebook_reg_p: null
+  codebook_weight_decay: 0.01
+
+pretrained_path: null
 get_baseline: False
 codebook_size: 100
-layers_to_snap: [0,1]
+layers_to_snap: all
 similarity_metric: euclidean
-codebook_at: attention
+codebook_at: preproj_attention
 num_compositional_codebooks: 2
-train_model_params: False
-model_lr_factor: 0.1
-vqvae_loss: True
-tag_keys: ["codebook_at", "per_device_train_batch_size", "model_name_or_path"]
+k_codebook: 3
+tag_keys: ["codebook_at", "model_name_or_path"]
 tags: ["test", "TGPT"]
 project: gpt2-codebook
