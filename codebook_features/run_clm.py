@@ -383,7 +383,7 @@ def get_trainer_and_dataset(
                     raw_datasets["validation"] = load_dataset(
                         data_args.dataset_name,
                         data_args.dataset_config_name,
-                        split=f"train[:{data_args.validation_split_percentage}%]",
+                        split=f"train[:{data_args.max_eval_samples}]",
                         cache_dir=model_args.cache_dir,
                         use_auth_token=True if model_args.use_auth_token else None,
                         streaming=data_args.streaming,
@@ -391,7 +391,7 @@ def get_trainer_and_dataset(
                     raw_datasets["train"] = load_dataset(
                         data_args.dataset_name,
                         data_args.dataset_config_name,
-                        split=f"train[{data_args.validation_split_percentage}%:]",
+                        split=f"train[{data_args.max_eval_samples}:]",
                         cache_dir=model_args.cache_dir,
                         use_auth_token=True if model_args.use_auth_token else None,
                         streaming=data_args.streaming,
@@ -520,9 +520,9 @@ def get_trainer_and_dataset(
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
-    embedding_size = model.get_input_embeddings().weight.shape[0]
-    if len(tokenizer) > embedding_size:
-        model.resize_token_embeddings(len(tokenizer))
+    # embedding_size = model.get_input_embeddings().weight.shape[0]
+    # if len(tokenizer) > embedding_size:
+    #     model.resize_token_embeddings(len(tokenizer))
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.

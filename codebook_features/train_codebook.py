@@ -41,7 +41,6 @@ def main(cfg):
 
     Returns: tuple of metrics for trained model and the baseline metrics.
     """
-    print(cfg)
     training_args = run_clm.TrainingArguments(**cfg.training_args)
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
@@ -97,6 +96,7 @@ def main(cfg):
             eval_args,
             model,
         )
+        model = torch.compile(model)
         baseline_metrics = run_clm.run_trainer(
             model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
         )
@@ -110,6 +110,9 @@ def main(cfg):
         config=codebook_config,
         pretrained_path=cfg.pretrained_path,
     )
+    if training_args.logging_strategy == "no" and training_args.evaluation_strategy == "no":
+        model.disable_logging()
+
     if training_args.train_model_params:
         params = [
             {
@@ -157,6 +160,7 @@ def main(cfg):
         model.init_codebook(trainer.get_train_dataloader())
 
     model.enable_codebooks()
+    model = torch.compile(model)
     metrics = run_clm.run_trainer(
         model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
     )

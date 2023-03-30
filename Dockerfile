@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:latest
+FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
 # Install dependencies
 ARG DEBIAN_FRONTEND=noninteractive
 ARG GIT_UPSTREAM
@@ -6,7 +6,7 @@ ENV GIT_UPSTREAM=${GIT_UPSTREAM}
 ARG GIT_BRANCH
 ENV GIT_BRANCH=${GIT_BRANCH}
 # Install OS dependencies
-RUN apt update && apt install -y git strace vim nano wget tmux curl nodejs && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install -y --no-install-recommends sudo git ssh openssh-server strace vim nano wget tmux curl nodejs && rm -rf /var/lib/apt/lists/*
 # Initialize build-time git repositories (set $GIT_UPSTREAM and optionally $GIT_BRANCH)
 COPY git_pull.sh /usr/local/bin/git_pull.sh
 WORKDIR /root
@@ -29,6 +29,10 @@ ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /usr/
 RUN chmod +x /usr/bin/tini
 #ENTRYPOINT ["/usr/bin/tini", "--"]
 
+# add ssh key
+COPY authorized_keys /root/.ssh/authorized_keys
+RUN mkdir /run/sshd
+RUN /usr/sbin/sshd
 
 # create a user with the right UID etc.
 ARG UID=1036
@@ -36,8 +40,9 @@ ARG USERNAME=mtaufeeque
 RUN groupadd -g "$UID" "$USERNAME"
 RUN useradd -r -d /homedir -s /bin/bash -u "$UID" -g "$USERNAME" "$USERNAME"
 RUN mkdir -p /homedir && chown -R "$USERNAME:$USERNAME" /homedir
-#USER $USERNAME
-
+RUN usermod -aG sudo "$USERNAME"
+RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+USER $USERNAME
 
 WORKDIR /data/codebook-features
 COPY . /data/codebook-features
@@ -47,6 +52,6 @@ RUN git config --global --add safe.directory /data/codebook-features
 RUN pip install -e .
 RUN pip install pytest plotly 
 RUN pip install git+https://github.com/neelnanda-io/PySvelte.git
-RUN pip install git+https://github.com/neelnanda-io/TransformerLens
+RUN pip install git+https://github.com/taufeeque9/TransformerLens
 WORKDIR /data/codebook-features/codebook_features
 

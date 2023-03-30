@@ -67,9 +67,9 @@ class CodebookTrainer(transformers.Trainer):
             logs: log dictionary.
         """
         metric_prefix = ""
-        if any("train_" in k for k in logs.keys()):
+        if all("train_" in k for k in logs.keys()):
             metric_prefix = "train_"
-        elif any("eval_" in k for k in logs.keys()):
+        elif all("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
 
         if isinstance(self.model, models.CodebookModel):
