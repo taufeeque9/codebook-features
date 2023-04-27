@@ -1,20 +1,21 @@
 model_args:
   model_name_or_path: taufeeque/tiny-gpt2
-  cache_dir: null
+  cache_dir: /data/.cache
+
 data_args:
   dataset_name: wikitext
   dataset_config_name: wikitext-2-raw-v1
-  max_train_samples: 4
-  max_eval_samples: 4
+  max_train_samples: 2
+  max_eval_samples: 2
   streaming: False
 training_args:
   run_name: test
-  output_dir: output
+  output_dir: output_test
   overwrite_output_dir: True
   do_train: True
   do_eval: True
   max_steps: 2
-  save_steps: 100
+  save_steps: 1
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
   evaluation_strategy: steps
@@ -24,18 +25,35 @@ training_args:
 
   train_model_params: True
   model_lr_factor: 0.1
-  vqvae_loss: False
   codebook_reg_p: null
   codebook_weight_decay: 0.01
 
+codebook_args:
+  codebook_type: vanilla
+  num_codes: 100
+  num_codebooks: 1
+  layers_to_snap: all
+  similarity_metric: inner_product
+  codebook_at: attention_and_mlp
+  loss: aeloss
+  k_codebook: 3
+  kmeans_init: False
+  # kmeans_path: kmeans_embeddings.pt
+  kmeans_path: null
+  kmeans_init_examples: 1000
+  kmeans_kwargs:
+    n_init: 1
+    batch_size: 1024
+    verbose: 1
+
+k_scheduler_kwargs: null
+  # k_max: 100
+  # decay_steps: 2
+
+disable_logging: False
+wandb_charts: False
 pretrained_path: null
 get_baseline: False
-codebook_size: 100
-layers_to_snap: all
-similarity_metric: euclidean
-codebook_at: preproj_attention
-num_compositional_codebooks: 2
-k_codebook: 3
-tag_keys: ["codebook_at", "model_name_or_path"]
+tag_keys: [num_codes,loss,codebook_type]
 tags: ["test", "TGPT"]
 project: gpt2-codebook

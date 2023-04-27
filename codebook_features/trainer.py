@@ -67,9 +67,9 @@ class CodebookTrainer(transformers.Trainer):
             logs: log dictionary.
         """
         metric_prefix = ""
-        if any("train_" in k for k in logs.keys()):
+        if all("train_" in k for k in logs.keys()):
             metric_prefix = "train_"
-        elif any("eval_" in k for k in logs.keys()):
+        elif all("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
 
         if isinstance(self.model, models.CodebookModel):
@@ -90,6 +90,12 @@ class CodebookTrainer(transformers.Trainer):
                     )
                     logs[metric_prefix + f"MSE/layer{codebook_idx}"] = sum(
                         codebook.reconstruction_mse for codebook in codebooks
+                    ) / len(codebooks)
+                    logs[metric_prefix + f"input_norm/layer{codebook_idx}"] = sum(
+                        codebook.input_norm for codebook in codebooks
+                    ) / len(codebooks)
+                    logs[metric_prefix + f"output_norm/layer{codebook_idx}"] = sum(
+                        codebook.output_norm for codebook in codebooks
                     ) / len(codebooks)
                     layer_mean_norm = sum(
                         codebook.avg_norm() for codebook in codebooks
@@ -123,6 +129,14 @@ class CodebookTrainer(transformers.Trainer):
                     logs[metric_prefix + f"MSE/layer{codebook_idx}"]
                     for codebook_idx in all_codebooks
                 ) / len(all_codebooks)
+                logs[metric_prefix + "input_norm"] = sum(
+                    logs[metric_prefix + f"input_norm/layer{codebook_idx}"]
+                    for codebook_idx in all_codebooks
+                ) / len(all_codebooks)
+                logs[metric_prefix + "output_norm"] = sum(
+                    logs[metric_prefix + f"output_norm/layer{codebook_idx}"]
+                    for codebook_idx in all_codebooks
+                ) / len(all_codebooks)
                 if metric_prefix != "eval_":
                     logs[metric_prefix + "mean_norm"] = mean_norm / len(all_codebooks)
                     logs[metric_prefix + "max_norm"] = max_norm
@@ -132,9 +146,9 @@ class CodebookTrainer(transformers.Trainer):
 class WandbCallback(transformers.integrations.WandbCallback):
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         metric_prefix = ""
-        if any("train_" in k for k in logs.keys()):
+        if all("train_" in k for k in logs.keys()):
             metric_prefix = "train_"
-        elif any("eval_" in k for k in logs.keys()):
+        elif all("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
 
         if (
@@ -209,14 +223,15 @@ class MultiOptimizer(torch.optim.Optimizer):
 
 
 class MulticodeKScheduler(transformers.TrainerCallback):
-    def __init__(self, k_max, k_min, decay_steps):
+    def __init__(self, k_max, k_min, decay_steps, decay_power=1):
         self.k_max = k_max
         self.k_min = k_min
         self.decay_steps = decay_steps - 1
+        self.decay_power = decay_power
 
     def k_scheduler(self, step):
         return int(
-            self.k_max - (self.k_max - self.k_min) * min(1, step / self.decay_steps)
+            self.k_max - (self.k_max - self.k_min) * min(1, (step / self.decay_steps)**(1/self.decay_power))
         )
 
     def on_step_begin(

@@ -1,7 +1,13 @@
 """contains the model classes where codebook is applied by modifying the forward pass of the model."""
 from typing import Optional, Tuple, Union
 
+import einops
 import torch
+import torch.nn.functional as F
+import transformer_lens
+from fancy_einsum import einsum
+from jaxtyping import Float
+from transformer_lens import components as tl_components
 from transformers.models.gpt2 import modeling_gpt2
 from transformers.models.gpt_neox import modeling_gpt_neox
 
@@ -284,13 +290,155 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
         attn_output = self._merge_heads(
             attn_output, self.num_attention_heads, self.head_size
         )
-        attn_output = self.dense(attn_output)
 
         if self.codebook_layer is not None and self.snap:
             attn_output = self.codebook_layer(attn_output)
+
+        attn_output = self.dense(attn_output)
 
         outputs = (attn_output, present)
         if output_attentions:
             outputs += (attn_weights,)
 
         return outputs
+
+
+
+class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
+    def __init__(self, config, layer_idx=None, codebook_layer=None):
+        super().__init__(config, layer_id=layer_idx)
+        self.codebook_layer = codebook_layer
+        self.snap = True
+        self.layer_idx = layer_idx
+
+    def forward(
+        self,
+        query_input: Union[
+            Float[torch.Tensor, "batch pos d_model"],
+            Float[torch.Tensor, "batch pos head_index d_model"],
+        ],
+        key_input: Union[
+            Float[torch.Tensor, "batch pos d_model"],
+            Float[torch.Tensor, "batch pos head_index d_model"],
+        ],
+        value_input: Union[
+            Float[torch.Tensor, "batch pos d_model"],
+            Float[torch.Tensor, "batch pos head_index d_model"],
+        ],
+        past_kv_cache_entry: Optional[
+            transformer_lens.past_key_value_caching.HookedTransformerKeyValueCacheEntry
+        ] = None,
+    ) -> Float[torch.Tensor, "batch pos d_model"]:
+        """
+        shortformer_pos_embed is only used if self.cfg.positional_embedding_type == "shortformer", else defaults to None and is irrelevant. See HookedTransformerConfig for more details
+        past_kv_cache_entry is an optional entry of past keys and values for this layer, only relevant if generating text. Defaults to None
+        """
+
+        if self.cfg.use_split_qkv_input:
+            qkv_einops_string = "batch pos head_index d_model"
+        else:
+            qkv_einops_string = "batch pos d_model"
+
+        q = self.hook_q(
+            einsum(
+                f"{qkv_einops_string}, head_index d_model d_head \
+                -> batch pos head_index d_head",
+                query_input,
+                self.W_Q,
+            )
+            + self.b_Q
+        )  # [batch, pos, head_index, d_head]
+        k = self.hook_k(
+            einsum(
+                f"{qkv_einops_string}, head_index d_model d_head \
+                -> batch pos head_index d_head",
+                key_input,
+                self.W_K,
+            )
+            + self.b_K
+        )  # [batch, pos, head_index, d_head]
+        v = self.hook_v(
+            einsum(
+                f"{qkv_einops_string}, head_index d_model d_head \
+                -> batch pos head_index d_head",
+                value_input,
+                self.W_V,
+            )
+            + self.b_V
+        )  # [batch, pos, head_index, d_head]
+
+        if past_kv_cache_entry is not None:
+            # Appends the new keys and values to the cached values, and automatically updates the cache
+            kv_cache_pos_offset = past_kv_cache_entry.past_keys.size(1)
+            k, v = past_kv_cache_entry.append(k, v)
+        else:
+            # Not using a cache
+            kv_cache_pos_offset = 0
+
+        if self.cfg.positional_embedding_type == "rotary":
+            q, k = self.rotary_rotate_qk(q, k, kv_cache_pos_offset)
+
+        attn_scores = (
+            einsum(
+                "batch query_pos head_index d_head, \
+                batch key_pos head_index d_head \
+                -> batch head_index query_pos key_pos",
+                q,
+                k,
+            )
+            / self.attn_scale
+        )  # [batch, head_index, query_pos, key_pos]
+        if self.cfg.attention_dir == "causal":
+            # If causal attention, we mask it to only attend backwards. If bidirectional, we don't mask.
+            attn_scores = self.apply_causal_mask(
+                attn_scores, kv_cache_pos_offset
+            )  # [batch, head_index, query_pos, key_pos]
+        attn_scores = self.hook_attn_scores(attn_scores)
+        pattern = self.hook_pattern(
+            F.softmax(attn_scores, dim=-1)
+        )  # [batch, head_index, query_pos, key_pos]
+        z = self.hook_z(
+            einsum(
+                "batch key_pos head_index d_head, \
+                batch head_index query_pos key_pos -> \
+                batch query_pos head_index d_head",
+                v,
+                pattern,
+            )
+        )  # [batch, pos, head_index, d_head]
+
+        if self.codebook_layer is not None and self.snap:
+            z = self.codebook_layer(z)
+
+        if not self.cfg.use_attn_result:
+            out = (
+                (
+                    einsum(
+                        "batch pos head_index d_head, \
+                        head_index d_head d_model -> \
+                        batch pos d_model",
+                        z,
+                        self.W_O,
+                    )
+                )
+                + self.b_O
+            )  # [batch, pos, d_model]
+        else:
+            # Explicitly calculate the attention result so it can be accessed by a hook
+            # This is off by default because it can easily eat through your GPU memory.
+            result = self.hook_result(
+                einsum(
+                    "batch pos head_index d_head, \
+                        head_index d_head d_model -> \
+                        batch pos head_index d_model",
+                    z,
+                    self.W_O,
+                )
+            )  # [batch, pos, head_index, d_model]
+            out = (
+                einops.reduce(
+                    result, "batch position index model->batch position model", "sum"
+                )
+                + self.b_O
+            )  # [batch, pos, d_model]
+        return out

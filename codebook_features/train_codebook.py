@@ -86,33 +86,31 @@ def main(cfg):
         eval_args = dataclasses.replace(
             training_args,
             output_dir=baseline_output_dir,
-            do_train=False,
-            do_eval=True,
-            report_to="none",
         )
-        baseline_metrics = run_clm.main(
+        trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
             model_args,
             data_args,
-            training_args=eval_args,
-            model=model,
+            eval_args,
+            model,
+        )
+        model = torch.compile(model)
+        baseline_metrics = run_clm.run_trainer(
+            model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
         )
         baseline_metrics = {"baseline/" + k: v for k, v in baseline_metrics.items()}
         with open(baseline_output_dir + "/metrics.json", "w") as f:
             json.dump(baseline_metrics, f)
-    else:
-        try:
-            with open(baseline_output_dir + "/metrics.json", "r") as f:
-                baseline_metrics = json.load(f)
-        except FileNotFoundError:
-            baseline_metrics = {}
-    if training_args.local_rank <= 0:
-        wandb.log(baseline_metrics, commit=False)
+        return baseline_metrics
     codebook_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
     model = models.wrap_codebook(
         model_or_path=model,
         config=codebook_config,
         pretrained_path=cfg.pretrained_path,
     )
+
+    if cfg.disable_logging:
+        model.disable_logging()
+
     if training_args.train_model_params:
         params = [
             {
@@ -140,7 +138,7 @@ def main(cfg):
         RuntimeWarning("Codebook not found in model. Training with model params.")
         optimizer = None
 
-    callbacks = [cb_trainer.WandbCallback()]
+    callbacks = [cb_trainer.WandbCallback()] if cfg.wandb_charts else []
     if cfg.k_scheduler_kwargs is not None:
         k_scheduler = cb_trainer.MulticodeKScheduler(
             k_min=cfg.codebook_args.k_codebook, **cfg.k_scheduler_kwargs
@@ -160,11 +158,12 @@ def main(cfg):
         model.init_codebook(trainer.get_train_dataloader())
 
     model.enable_codebooks()
+    model = torch.compile(model)
     metrics = run_clm.run_trainer(
         model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
     )
 
-    return metrics, baseline_metrics
+    return metrics
 
 
 if __name__ == "__main__":
