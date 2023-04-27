@@ -2,6 +2,7 @@
 
 import abc
 import os
+import re
 from collections import Counter
 from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
 
@@ -12,9 +13,9 @@ import transformers
 from sklearn import cluster as sklearn_cluster
 from torch import nn
 from tqdm import tqdm
+from transformer_lens.hook_points import HookPoint
 
 from codebook_features import mod_model_classes
-from transformer_lens.hook_points import HookPoint
 
 
 class KmeansEmbedding(nn.Embedding):
@@ -210,7 +211,7 @@ class InnerProductSnapFunction(BaseSnapFunction):
 
 class EuclideanSnapFunction(BaseSnapFunction):
     @staticmethod
-    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor, disabled_codes):
+    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor, hook_kwargs):
         """Compute output of the snap function with the minimum euclidean
         distance as the similarity metric.
 
@@ -387,14 +388,21 @@ class CodebookLayer(nn.Module):
             # Hard choice of a single codebook vector
             output, codebook_ids = self.snap_fn.apply(self.ln(x), self.codebook.weight, self.hook_kwargs)
             codebook_ids = self.hook_codebook_ids(codebook_ids)
+            if not self.training:
+                output = self.codebook(codebook_ids).mean(dim=-2)
+
             # update metrics
             # self.counts.update(codebook_ids.cpu().numpy().flat)
             if self.logging:
                 with torch.no_grad():
-                    self.codes_triggered, counts = torch.unique(
-                        codebook_ids.cpu(), sorted=False, return_counts=True
+#                    self.codes_triggered, counts = torch.unique(
+#                        codebook_ids.cpu(), sorted=False, return_counts=True
+#                    )
+#                    self.counts[self.codes_triggered] += counts
+                    self.codes_triggered = torch.unique(
+                        codebook_ids.cpu(), sorted=False, return_counts=False
                     )
-                    self.counts[self.codes_triggered] += counts
+                    self.counts[self.codes_triggered] += 1
                 coeff = x.shape[0] * x.shape[1]
                 coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
                 mse = torch.mean(((x - output) ** 2).sum(dim=-1))
@@ -717,19 +725,26 @@ class CompositionalCodebookLayer(nn.Module):
 
         Args:
         ----
-            x: input tensor of shape: (batch_size, seq_len, dim).
+            x: input tensor of shape: (batch_size, seq_len, dim) or (batch_size, seq_len, num_heads, dim).
 
         Returns: output with the feature vectors replaced using the compositional codebook.
         """
-        assert len(x.shape) == 3
-        output = torch.cat(
-            [
-                self.codebook[i](chunk)
-                for i, chunk in enumerate(x.chunk(self.num_codebooks, dim=-1))
-            ],
-            dim=-1,
-        )
-        return output
+        if len(x.shape) == 4:
+            assert x.shape[2] == self.num_codebooks
+            output = torch.stack(
+                [self.codebook[i](x[:, :, i]) for i in range(self.num_codebooks)], dim=2
+            )
+            return output
+        else:
+            assert len(x.shape) == 3
+            output = torch.cat(
+                [
+                    self.codebook[i](chunk)
+                    for i, chunk in enumerate(x.chunk(self.num_codebooks, dim=-1))
+                ],
+                dim=-1,
+            )
+            return output
     
     def set_hook_kwargs(self, idx=None, **kwargs):
         if idx is not None:
@@ -1679,6 +1694,10 @@ class GPT2CodebookModel(CodebookModel):
         return "attn"
 
     @property
+    def qkv_key(self):
+        return "c_attn"
+
+    @property
     def mlp_key(self):
         """Returns the attribute name used for mlp in the model."""
         return "mlp"
@@ -1767,6 +1786,10 @@ class GPTNeoXCodebookModel(CodebookModel):
         return "attention"
 
     @property
+    def qkv_key(self):
+        return "query_key_value"
+
+    @property
     def mlp_key(self):
         """Returns the attribute name used for mlp in the model."""
         return "mlp"
@@ -1808,6 +1831,7 @@ class HookedTransformerCodebookModel(CodebookModel):
         self,
         config,
         model,
+        base_model_config,
     ):
         """Build the codebook based model.
 
@@ -1820,8 +1844,16 @@ class HookedTransformerCodebookModel(CodebookModel):
             config=config,
             model=model,
         )
+        # get config key values from original class
+        for k,v in base_model_config.__dict__.items():
+            if not k in self.model.cfg.__dict__:
+                self.model.cfg.__setattr__(k, v)
+        for k1,k2 in base_model_config.attribute_map.items():
+            if not k1 in self.model.cfg.__dict__:
+                self.model.cfg.__setattr__(k1, base_model_config.__getattribute__(k2))
         self.add_codebooks()
         self.forward = self.model.forward
+        
 
     def __setattr__(self, name: str, value: Any) -> None:
         super().__setattr__(name, value)
@@ -1867,12 +1899,17 @@ class HookedTransformerCodebookModel(CodebookModel):
     @property
     def pre_projection_attn_codebook_cls(self):
         """Returns the class to use for applying codebook to attention before projection."""
-        raise NotImplementedError("Not implemented for HookedTransformer.")
+        return mod_model_classes.PreProjectionAttentionCodebookHookedTransformer
 
     @property
     def pre_residual_codebook_cls(self):
         """Returns the class to use for codebook before residual."""
-        raise NotImplementedError("Not implemented for HookedTransformer.")
+        if self.model.cfg.original_architecture == "GPT2LMHeadModel":
+            return mod_model_classes.PreResidualCodebookGPT2Block
+        elif self.model.cfg.original_architecture == "GPTNeoXForCausalLM":
+            return mod_model_classes.PreResidualCodebookGPTNeoXBlock
+        else:
+            raise ValueError(f"pre_residual cls not available for {self.model.cfg.model_name}")
 
     @property
     def num_heads(self):
@@ -1940,9 +1977,8 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs={}):
         state_dict,
         **hooked_kwargs,
     )
-    cb_model = HookedTransformerCodebookModel(orig_cb_model.config, model)
+    cb_model = HookedTransformerCodebookModel(orig_cb_model.config, model, orig_cb_model.model.config)
     cb_sd = {}
-    import re
 
     for key, value in orig_cb_model.model.state_dict().items():
         if "codebook" in key:

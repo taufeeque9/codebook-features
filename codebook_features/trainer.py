@@ -146,9 +146,9 @@ class CodebookTrainer(transformers.Trainer):
 class WandbCallback(transformers.integrations.WandbCallback):
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         metric_prefix = ""
-        if any("train_" in k for k in logs.keys()):
+        if all("train_" in k for k in logs.keys()):
             metric_prefix = "train_"
-        elif any("eval_" in k for k in logs.keys()):
+        elif all("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
 
         if (
@@ -223,14 +223,15 @@ class MultiOptimizer(torch.optim.Optimizer):
 
 
 class MulticodeKScheduler(transformers.TrainerCallback):
-    def __init__(self, k_max, k_min, decay_steps):
+    def __init__(self, k_max, k_min, decay_steps, decay_power=1):
         self.k_max = k_max
         self.k_min = k_min
         self.decay_steps = decay_steps - 1
+        self.decay_power = decay_power
 
     def k_scheduler(self, step):
         return int(
-            self.k_max - (self.k_max - self.k_min) * min(1, step / self.decay_steps)
+            self.k_max - (self.k_max - self.k_min) * min(1, (step / self.decay_steps)**(1/self.decay_power))
         )
 
     def on_step_begin(

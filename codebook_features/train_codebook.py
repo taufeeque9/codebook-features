@@ -45,9 +45,6 @@ def main(cfg):
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
     training_args.local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    if model_args.cache_dir:
-        training_args.output_dir = model_args.cache_dir + "/" + training_args.output_dir
-        model_args.cache_dir += "/" + "huggingface"
 
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
     # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
@@ -110,7 +107,8 @@ def main(cfg):
         config=codebook_config,
         pretrained_path=cfg.pretrained_path,
     )
-    if training_args.logging_strategy == "no" and training_args.evaluation_strategy == "no":
+
+    if cfg.disable_logging:
         model.disable_logging()
 
     if training_args.train_model_params:
@@ -140,7 +138,7 @@ def main(cfg):
         RuntimeWarning("Codebook not found in model. Training with model params.")
         optimizer = None
 
-    callbacks = [cb_trainer.WandbCallback()]
+    callbacks = [cb_trainer.WandbCallback()] if cfg.wandb_charts else []
     if cfg.k_scheduler_kwargs is not None:
         k_scheduler = cb_trainer.MulticodeKScheduler(
             k_min=cfg.codebook_args.k_codebook, **cfg.k_scheduler_kwargs

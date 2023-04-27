@@ -1,6 +1,7 @@
 model_args:
   model_name_or_path: taufeeque/tiny-gpt2
-  cache_dir: null
+  cache_dir: /data/.cache
+
 data_args:
   dataset_name: wikitext
   dataset_config_name: wikitext-2-raw-v1
@@ -9,12 +10,12 @@ data_args:
   streaming: False
 training_args:
   run_name: test
-  output_dir: output
+  output_dir: output_test
   overwrite_output_dir: True
   do_train: True
   do_eval: True
   max_steps: 2
-  save_steps: 100
+  save_steps: 1
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
   evaluation_strategy: steps
@@ -45,10 +46,12 @@ codebook_args:
     batch_size: 1024
     verbose: 1
 
-k_scheduler_kwargs:
-  k_max: 100
-  decay_steps: 2
+k_scheduler_kwargs: null
+  # k_max: 100
+  # decay_steps: 2
 
+disable_logging: False
+wandb_charts: False
 pretrained_path: null
 get_baseline: False
 tag_keys: [num_codes,loss,codebook_type]

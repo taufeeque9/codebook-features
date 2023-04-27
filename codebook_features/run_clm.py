@@ -36,18 +36,13 @@ from typing import Optional, Tuple
 
 import datasets
 import evaluate
+import numpy as np
 import transformers
 from datasets import load_dataset
 from transformers import (  # HfArgumentParser,; TrainingArguments,
-    CONFIG_MAPPING,
-    MODEL_FOR_CAUSAL_LM_MAPPING,
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    default_data_collator,
-    is_torch_tpu_available,
-    set_seed,
-)
+    CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig,
+    AutoModelForCausalLM, AutoTokenizer, default_data_collator,
+    is_torch_tpu_available, set_seed)
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
@@ -636,11 +631,13 @@ def get_trainer_and_dataset(
                 train_dataset = train_dataset.take(data_args.max_train_samples)
             else:
                 max_train_samples = min(len(train_dataset), data_args.max_train_samples)
-                train_dataset = train_dataset.select(range(max_train_samples))
+                indices = np.random.choice(len(train_dataset), max_train_samples, replace=False)
+                train_dataset = train_dataset.select(indices, keep_in_memory=True).flatten_indices()
         if isinstance(train_dataset, datasets.IterableDataset):
             train_dataset = train_dataset.with_format("torch")
 
     if training_args.do_eval:
+        lm_datasets["validation"] = lm_datasets["validation"].shuffle(seed=42)
         if "validation" not in tokenized_datasets:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = lm_datasets["validation"]
@@ -649,7 +646,8 @@ def get_trainer_and_dataset(
                 eval_dataset = eval_dataset.take(data_args.max_eval_samples)
             else:
                 max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
-                eval_dataset = eval_dataset.select(range(max_eval_samples))
+                indices = np.random.choice(len(eval_dataset), max_eval_samples, replace=False)
+                eval_dataset = eval_dataset.select(indices, keep_in_memory=True).flatten_indices()
         if isinstance(eval_dataset, datasets.IterableDataset):
             eval_dataset = eval_dataset.with_format("torch")
 
