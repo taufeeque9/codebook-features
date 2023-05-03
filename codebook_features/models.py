@@ -188,20 +188,48 @@ class InnerProductSnapFunction(BaseSnapFunction):
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
         logits = torch.matmul(inputs, codebook.T)
-        if hook_kwargs["disable_for_tkns"] == 'all':
-            logits[:, :, hook_kwargs["disable_codes"]] = float('-inf')
-            _, codebook_ids = logits.topk(BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1)
-            codebook_ids = codebook_ids[:, :, -BaseSnapFunction.k:]
+        if hook_kwargs["keep_k_codes"]:
+            if hook_kwargs["disable_for_tkns"] == "all":
+                logits[:, :, hook_kwargs["disable_codes"]] = float("-inf")
+                _, codebook_ids = logits.topk(
+                    BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1
+                )
+                codebook_ids = codebook_ids[:, :, -BaseSnapFunction.k :]
+            else:
+                for code in hook_kwargs["disable_codes"]:
+                    logits[:, hook_kwargs["disable_for_tkns"], code] = float("-inf")
+                _, codebook_ids_all = logits.topk(
+                    BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1
+                )
+                codebook_ids = codebook_ids_all[:, :, : BaseSnapFunction.k]
+                codebook_ids[:, hook_kwargs["disable_for_tkns"]] = codebook_ids_all[
+                    :, hook_kwargs["disable_for_tkns"], -BaseSnapFunction.k :
+                ]
+            # enable gradient so that outputs.grad_fn can be used in backward pass.
+            with torch.enable_grad():
+                outputs = torch.nn.functional.embedding(codebook_ids, codebook)
+                outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
         else:
-            for code in hook_kwargs["disable_codes"]:
-                logits[:, hook_kwargs["disable_for_tkns"], code] = float('-inf')
-            _, codebook_ids_all = logits.topk(BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1)
-            codebook_ids = codebook_ids_all[:, :, :BaseSnapFunction.k]
-            codebook_ids[:, hook_kwargs["disable_for_tkns"]] = codebook_ids_all[:, hook_kwargs["disable_for_tkns"], -BaseSnapFunction.k:]
-        # enable gradient so that outputs.grad_fn can be used in backward pass.
-        with torch.enable_grad():
-            outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+            _, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
+            input_codes = torch.nn.functional.embedding(codebook_ids, codebook)
+            if hook_kwargs["disable_for_tkns"] == "all":
+                unblock_tkns = torch.zeros(
+                    codebook_ids.shape[1], dtype=torch.bool, device=codebook_ids.device
+                )
+            else:
+                unblock_tkns = torch.ones(
+                    codebook_ids.shape[1], dtype=torch.bool, device=codebook_ids.device
+                )
+                unblock_tkns[hook_kwargs["disable_for_tkns"]] = False
+            block_idx = torch.isin(
+                codebook_ids, torch.tensor(hook_kwargs["disable_codes"])
+            )
+            block_idx[:, :, : hook_kwargs["disable_topk"]] = True
+            block_idx[:, unblock_tkns, :] = False
+            codebook_ids[block_idx] = -1
+            input_codes[block_idx] = 0
+            outputs = input_codes.sum(dim=-2) / BaseSnapFunction.k
+
         ctx.save_for_backward(inputs, codebook, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
@@ -226,17 +254,49 @@ class EuclideanSnapFunction(BaseSnapFunction):
 
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
-        # torch function to check angle between two vectors: torch.nn.functional.cosine_similarity
         logits = -torch.cdist(inputs, codebook, p=2)  # logits are negative distances
-        logits[:, :, hook_kwargs["disable_codes"]] = float('-inf')
-        _, codebook_ids = logits.topk(BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1)
-        codebook_ids = codebook_ids[:, :, -BaseSnapFunction.k:]
-        _, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
-        # enable gradient so that outputs.grad_fn can be used in backward pass.
-        with torch.enable_grad():
-            outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-            outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
-            # mse = torch.mean(torch.sum(((inputs - outputs) ** 2), dim=-1))
+        if hook_kwargs["keep_k_codes"]:
+            if hook_kwargs["disable_for_tkns"] == "all":
+                logits[:, :, hook_kwargs["disable_codes"]] = float("-inf")
+                _, codebook_ids = logits.topk(
+                    BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1
+                )
+                codebook_ids = codebook_ids[:, :, -BaseSnapFunction.k :]
+            else:
+                for code in hook_kwargs["disable_codes"]:
+                    logits[:, hook_kwargs["disable_for_tkns"], code] = float("-inf")
+                _, codebook_ids_all = logits.topk(
+                    BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1
+                )
+                codebook_ids = codebook_ids_all[:, :, : BaseSnapFunction.k]
+                codebook_ids[:, hook_kwargs["disable_for_tkns"]] = codebook_ids_all[
+                    :, hook_kwargs["disable_for_tkns"], -BaseSnapFunction.k :
+                ]
+            # enable gradient so that outputs.grad_fn can be used in backward pass.
+            with torch.enable_grad():
+                outputs = torch.nn.functional.embedding(codebook_ids, codebook)
+                outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+        else:
+            _, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
+            input_codes = torch.nn.functional.embedding(codebook_ids, codebook)
+            if hook_kwargs["disable_for_tkns"] == "all":
+                unblock_tkns = torch.zeros(
+                    codebook_ids.shape[1], dtype=torch.bool, device=codebook_ids.device
+                )
+            else:
+                unblock_tkns = torch.ones(
+                    codebook_ids.shape[1], dtype=torch.bool, device=codebook_ids.device
+                )
+                unblock_tkns[hook_kwargs["disable_for_tkns"]] = False
+            block_idx = torch.isin(
+                codebook_ids, torch.tensor(hook_kwargs["disable_codes"])
+            )
+            block_idx[:, :, : hook_kwargs["disable_topk"]] = True
+            block_idx[:, unblock_tkns, :] = False
+            codebook_ids[block_idx] = -1
+            input_codes[block_idx] = 0
+            outputs = input_codes.sum(dim=-2) / BaseSnapFunction.k
+
         ctx.save_for_backward(inputs, codebook, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
         # overridden by SnapFunction.backward and we don't want the above
@@ -344,10 +404,10 @@ class CodebookLayer(nn.Module):
     def num_codes(self):
         """Return the total number of codes."""
         return self._num_codes
-    
+
     def enable_logging(self):
         self.logging = True
-        
+
     def disable_logging(self):
         self.logging = False
 
@@ -386,7 +446,9 @@ class CodebookLayer(nn.Module):
         assert len(x.shape) == 3  # (batch_size, seq_len, dim)
         if not self.soft_snap:
             # Hard choice of a single codebook vector
-            output, codebook_ids = self.snap_fn.apply(self.ln(x), self.codebook.weight, self.hook_kwargs)
+            output, codebook_ids = self.snap_fn.apply(
+                self.ln(x), self.codebook.weight, self.hook_kwargs
+            )
             codebook_ids = self.hook_codebook_ids(codebook_ids)
             if not self.training:
                 output = self.codebook(codebook_ids).mean(dim=-2)
@@ -395,10 +457,10 @@ class CodebookLayer(nn.Module):
             # self.counts.update(codebook_ids.cpu().numpy().flat)
             if self.logging:
                 with torch.no_grad():
-#                    self.codes_triggered, counts = torch.unique(
-#                        codebook_ids.cpu(), sorted=False, return_counts=True
-#                    )
-#                    self.counts[self.codes_triggered] += counts
+                    #                    self.codes_triggered, counts = torch.unique(
+                    #                        codebook_ids.cpu(), sorted=False, return_counts=True
+                    #                    )
+                    #                    self.counts[self.codes_triggered] += counts
                     self.codes_triggered = torch.unique(
                         codebook_ids.cpu(), sorted=False, return_counts=False
                     )
@@ -406,7 +468,9 @@ class CodebookLayer(nn.Module):
                 coeff = x.shape[0] * x.shape[1]
                 coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
                 mse = torch.mean(((x - output) ** 2).sum(dim=-1))
-                self.reconstruction_mse += coeff * (mse.item() - self.reconstruction_mse)
+                self.reconstruction_mse += coeff * (
+                    mse.item() - self.reconstruction_mse
+                )
                 self.input_norm += coeff * (
                     torch.norm(x, dim=-1).mean().item() - self.input_norm
                 )
@@ -438,10 +502,18 @@ class CodebookLayer(nn.Module):
 
     def set_hook_kwargs(self, **kwargs):
         self.hook_kwargs = {**self.hook_kwargs, **kwargs}
-        assert all(k in ["disable_topk", "disable_codes", "disable_for_tkns"] for k in self.hook_kwargs)
+        assert all(
+            k in ["disable_topk", "disable_codes", "disable_for_tkns", "keep_k_codes"]
+            for k in self.hook_kwargs
+        )
 
     def reset_hook_kwargs(self):
-        self.hook_kwargs = {"disable_topk": 0, "disable_codes": [], "disable_for_tkns": 'all'}
+        self.hook_kwargs = {
+            "disable_topk": 0,
+            "disable_codes": [],
+            "disable_for_tkns": "all",
+            "keep_k_codes": True,
+        }
 
     def reset_metrics(self):
         """Reset the counts of the codebook features."""
@@ -670,11 +742,11 @@ class CompositionalCodebookLayer(nn.Module):
         """Return the triggered codes of the codebooks."""
         triggered_codes = [codebook.get_triggered_codes() for codebook in self.codebook]
         return torch.cat(triggered_codes, dim=0)
-    
+
     def enable_logging(self):
         for codebook in self.codebook:
             codebook.enable_logging()
-            
+
     def disable_logging(self):
         for codebook in self.codebook:
             codebook.disable_logging()
@@ -745,7 +817,7 @@ class CompositionalCodebookLayer(nn.Module):
                 dim=-1,
             )
             return output
-    
+
     def set_hook_kwargs(self, idx=None, **kwargs):
         if idx is not None:
             self.codebook[idx].set_hook_kwargs(**kwargs)
@@ -1143,7 +1215,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         num_codes: int = 100,
         num_codebooks: int = 1,
         layers_to_snap: Sequence = (),
-        similarity_metric: str = "euclidean",
+        similarity_metric: str = "inner_product",
         codebook_at: Union[str, Sequence] = "mlp",
         loss: str = "base",
         k_codebook: int = 1,
@@ -1232,7 +1304,9 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         else:
             self.config.layers_to_snap = list(self.config.layers_to_snap)
             for i in range(len(self.config.layers_to_snap)):
-                assert -num_layers <= i and i < num_layers, f"Invalid layer index {i}. Layer index should be between {-num_layers} and {num_layers - 1}."
+                assert (
+                    -num_layers <= i and i < num_layers
+                ), f"Invalid layer index {i}. Layer index should be between {-num_layers} and {num_layers - 1}."
                 if self.config.layers_to_snap[i] < 0:
                     self.config.layers_to_snap[i] += num_layers
         self.config.layers_to_snap = sorted(self.config.layers_to_snap)
@@ -1249,7 +1323,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             raise ValueError(
                 "`similarity_metric` should be either 'euclidean' or 'inner_product'."
             )
-            
+
     def __getattr__(self, name):
         try:
             return super().__getattr__(name)
@@ -1347,7 +1421,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             wrapped_hidden_layer.codebook_layer.codebook.parameters(),
         )
         codebooks_in_layer.append(wrapped_hidden_layer)
-        
+
     def codebook_at_qkv(self, layers, i, codebooks_in_layer):
         attn = layers[i].__getattr__(self.attention_key)
         qkv = attn.__getattr__(self.qkv_key)
@@ -1456,7 +1530,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def get_model_params(self):
         """Gets model's original parameters (not including codebook params)."""
         return self.model_params
-    
+
     def set_hook_kwargs(self, idx=None, **kwargs):
         if idx is not None:
             for layer in list(self.all_codebooks.values())[idx]:
@@ -1558,12 +1632,12 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
                 codebook.partial_fit_codebook()
-                
+
     def enable_logging(self):
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
                 codebook.enable_logging()
-                
+
     def disable_logging(self):
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
@@ -1845,15 +1919,14 @@ class HookedTransformerCodebookModel(CodebookModel):
             model=model,
         )
         # get config key values from original class
-        for k,v in base_model_config.__dict__.items():
-            if not k in self.model.cfg.__dict__:
+        for k, v in base_model_config.__dict__.items():
+            if k not in self.model.cfg.__dict__:
                 self.model.cfg.__setattr__(k, v)
-        for k1,k2 in base_model_config.attribute_map.items():
-            if not k1 in self.model.cfg.__dict__:
+        for k1, k2 in base_model_config.attribute_map.items():
+            if k1 not in self.model.cfg.__dict__:
                 self.model.cfg.__setattr__(k1, base_model_config.__getattribute__(k2))
         self.add_codebooks()
         self.forward = self.model.forward
-        
 
     def __setattr__(self, name: str, value: Any) -> None:
         super().__setattr__(name, value)
@@ -1909,7 +1982,9 @@ class HookedTransformerCodebookModel(CodebookModel):
         elif self.model.cfg.original_architecture == "GPTNeoXForCausalLM":
             return mod_model_classes.PreResidualCodebookGPTNeoXBlock
         else:
-            raise ValueError(f"pre_residual cls not available for {self.model.cfg.model_name}")
+            raise ValueError(
+                f"pre_residual cls not available for {self.model.cfg.model_name}"
+            )
 
     @property
     def num_heads(self):
@@ -1977,7 +2052,9 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs={}):
         state_dict,
         **hooked_kwargs,
     )
-    cb_model = HookedTransformerCodebookModel(orig_cb_model.config, model, orig_cb_model.model.config)
+    cb_model = HookedTransformerCodebookModel(
+        orig_cb_model.config, model, orig_cb_model.model.config
+    )
     cb_sd = {}
 
     for key, value in orig_cb_model.model.state_dict().items():
