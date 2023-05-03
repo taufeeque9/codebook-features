@@ -1,6 +1,6 @@
 model_args:
   model_name_or_path: EleutherAI/pythia-70m-deduped
-  cache_dir: /.cache/cb_volume/
+  cache_dir: /data/.cache/huggingface
 data_args:
   dataset_name: wikitext
   dataset_config_name: wikitext-103-v1
@@ -13,8 +13,9 @@ training_args:
   do_eval: True
   per_device_train_batch_size: 24
   per_device_eval_batch_size: 8
-  warmup_ratio: 0.0
   learning_rate: 5e-4
+  warmup_ratio: 0.0
+  lr_scheduler_type: constant
   max_steps: 15000
   logging_first_step: True
   logging_steps: 50
@@ -22,21 +23,22 @@ training_args:
   eval_steps: 50
   save_steps: 10000
   ddp_find_unused_parameters: False
+  tf32: True
 
   train_model_params: True
-  model_lr_factor: 0.1
+  model_lr_factor: 1
   codebook_reg_p: null
   codebook_weight_decay: 0.01
 
 codebook_args:
-  codebook_type: vanilla
+  codebook_type: compositional
   num_codes: 10000
-  num_codebooks: 1
+  num_codebooks: -1
   layers_to_snap: all
   similarity_metric: inner_product
-  codebook_at: attention
+  codebook_at: preproj_attention
   loss: aeloss
-  k_codebook: 100
+  k_codebook: 8
   kmeans_init: False
   kmeans_path: /.cache/cb_volume/huggingface/kmeans_embeddings.pt
   kmeans_init_examples: 1000
@@ -44,10 +46,12 @@ codebook_args:
     n_init: auto
     batch_size: 24576
 
-k_scheduler_kwargs:
-  k_max: 10000
-  decay_steps: 5000
+k_scheduler_kwargs: null
+#   k_max: 10000
+#   decay_steps: 5000
 
+disable_logging: False
+wandb_charts: False
 pretrained_path: null
 get_baseline: False
 tag_keys: []

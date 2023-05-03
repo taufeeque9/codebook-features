@@ -5,20 +5,23 @@ from datetime import datetime
 
 import numpy as np
 
-from codebook_features import run_clm
+from codebook_features import models, run_clm
 
 
-def evaluate(model, model_args, data_args, eval_on="train"):
+def evaluate(model, model_args, data_args, eval_on="train", save_dir=None):
     """Evaluate a model on a dataset."""
     output_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    if save_dir is not None:
+        output_dir = f"{save_dir}/{output_dir}"
 
-    training_args = run_clm.TrainingArguments(output_dir=output_dir)
-    eval_args = dataclasses.replace(
-        training_args,
+    eval_args = run_clm.TrainingArguments(
+        output_dir=output_dir,
+        tf32=True,
+        per_device_train_batch_size=8,
+        per_device_eval_batch_size=64,
         do_train=True,
         do_eval=True,
         report_to="none",
-        per_device_eval_batch_size=32,
     )
     codebook_acts = {}
 
@@ -37,6 +40,11 @@ def evaluate(model, model_args, data_args, eval_on="train"):
     )
     dataset = trainer.train_dataset if eval_on == "train" else trainer.eval_dataset
     tokens = dataset["input_ids"]
+    print("tokens shape:", len(tokens))
+    if isinstance(model, models.HookedTransformerCodebookModel):
+        dataset.rename_column("input_ids", "input")
+
+    print("************Starting evaluation************")
     metrics = trainer.evaluate(eval_dataset=dataset)
     for k, v in codebook_acts.items():
         codebook_acts[k] = np.concatenate(v, axis=0)
@@ -46,4 +54,4 @@ def evaluate(model, model_args, data_args, eval_on="train"):
         pickle.dump(codebook_acts, f)
     np.save(f"{output_dir}/metrics.npy", metrics)
 
-    return tokens, codebook_acts, metrics
+    return tokens, codebook_acts, metrics, output_dir
