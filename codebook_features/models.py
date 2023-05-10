@@ -2047,6 +2047,8 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs={}):
         model_path,
         **hooked_kwargs,
     )
+    if "device" in hooked_kwargs:
+        hooked_kwargs.pop("device")
     state_dict = convert_state_dict(orig_cb_model.model, model.cfg)
     model.load_and_process_state_dict(
         state_dict,

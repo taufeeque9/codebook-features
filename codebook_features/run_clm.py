@@ -37,12 +37,19 @@ from typing import Optional, Tuple
 import datasets
 import evaluate
 import numpy as np
+import torch
 import transformers
 from datasets import load_dataset
 from transformers import (  # HfArgumentParser,; TrainingArguments,
-    CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig,
-    AutoModelForCausalLM, AutoTokenizer, default_data_collator,
-    is_torch_tpu_available, set_seed)
+    CONFIG_MAPPING,
+    MODEL_FOR_CAUSAL_LM_MAPPING,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    default_data_collator,
+    is_torch_tpu_available,
+    set_seed,
+)
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
@@ -631,8 +638,12 @@ def get_trainer_and_dataset(
                 train_dataset = train_dataset.take(data_args.max_train_samples)
             else:
                 max_train_samples = min(len(train_dataset), data_args.max_train_samples)
-                indices = np.random.choice(len(train_dataset), max_train_samples, replace=False)
-                train_dataset = train_dataset.select(indices, keep_in_memory=True).flatten_indices()
+                indices = np.random.choice(
+                    len(train_dataset), max_train_samples, replace=False
+                )
+                train_dataset = train_dataset.select(
+                    indices, keep_in_memory=True
+                ).flatten_indices()
         if isinstance(train_dataset, datasets.IterableDataset):
             train_dataset = train_dataset.with_format("torch")
 
@@ -646,8 +657,12 @@ def get_trainer_and_dataset(
                 eval_dataset = eval_dataset.take(data_args.max_eval_samples)
             else:
                 max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
-                indices = np.random.choice(len(eval_dataset), max_eval_samples, replace=False)
-                eval_dataset = eval_dataset.select(indices, keep_in_memory=True).flatten_indices()
+                indices = np.random.choice(
+                    len(eval_dataset), max_eval_samples, replace=False
+                )
+                eval_dataset = eval_dataset.select(
+                    indices, keep_in_memory=True
+                ).flatten_indices()
         if isinstance(eval_dataset, datasets.IterableDataset):
             eval_dataset = eval_dataset.with_format("torch")
 
@@ -725,7 +740,7 @@ def run_trainer(
 
         metrics = train_result.metrics
 
-        if not isinstance(train_dataset, datasets.IterableDataset):
+        if not is_iterable_dataset(train_dataset):
             max_train_samples = (
                 data_args.max_train_samples
                 if data_args.max_train_samples is not None
@@ -743,7 +758,7 @@ def run_trainer(
 
         metrics = trainer.evaluate()
 
-        if not isinstance(eval_dataset, datasets.IterableDataset):
+        if not is_iterable_dataset(eval_dataset):
             max_eval_samples = (
                 data_args.max_eval_samples
                 if data_args.max_eval_samples is not None
@@ -779,3 +794,9 @@ def run_trainer(
         trainer.create_model_card(**kwargs)
 
     return metrics
+
+
+def is_iterable_dataset(dataset):
+    return isinstance(dataset, datasets.IterableDataset) or isinstance(
+        dataset, torch.utils.data.IterableDataset
+    )
