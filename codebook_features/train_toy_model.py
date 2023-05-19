@@ -133,29 +133,34 @@ class ToyGraph:
     def nbrs(self, state):
         return np.where(self.transition_matrix[state] != 0)[0]
 
-    def correct_transitions(self, traj):
-        correct = 0
-        for i in range(len(traj) - 1):
-            if self.transition_matrix[traj[i], traj[i + 1]] != 0:
-                correct += 1
-        print(
-            "Correct:",
-        )
+    def transition_accuracy(self, trajs):
+        correct_transitions, correct_first_transitions, total_transitions = 0, 0, 0
+        for traj in trajs:
+            total_transitions += len(traj) - 1
+            for i in range(len(traj) - 1):
+                if self.transition_matrix[traj[i], traj[i + 1]] != 0:
+                    correct_transitions += 1
+                    if i == 0:
+                        correct_first_transitions += 1
         if len(traj) > 1:
-            return correct / (len(traj) - 1)
+            return (
+                correct_transitions / total_transitions,
+                correct_first_transitions / len(trajs),
+            )
         else:
-            return 0
+            return 0, 0
 
-    def seqs_to_traj(self, seqs):
-        if type(seqs) == str:
-            seqs = [seqs]
-        for seq in seqs:
+    def seq_to_traj(self, sequences):
+        if type(sequences) == str:
+            sequences = [sequences]
+        trajs = []
+        for seq in sequences:
             seq = seq.replace("<|endoftext|>", "")
-        return [
-            int(seq[i : i + self.digits])
-            for i in range(0, len(seq), self.digits)
-            if len(seq[i : i + self.digits]) == self.digits
-        ]
+            trajs.append([])
+            for i in range(0, len(seq), self.digits):
+                if len(seq[i : i + self.digits]) == self.digits:
+                    trajs[-1].append(int(seq[i : i + self.digits]))
+        return trajs
 
     def traj_to_str(self, traj):
         return "".join(["0" * (self.digits - len(str(x))) + str(x) for x in traj])
@@ -211,9 +216,10 @@ class ToyModelTrainer(cb_trainer.CodebookTrainer):
                 do_sample=True,
             )
             gen_seq = [self.tokenizer.decode(gen_seq[i]) for i in range(len(gen_seq))]
-            traj = self.toy_graph.seqs_to_traj(gen_seq)
-            correct_transitions = self.toy_graph.correct_transitions(traj)
-            logs[f"{metric_prefix}correct_transitions"] = correct_transitions
+            traj = self.toy_graph.seq_to_traj(gen_seq)
+            ov_trans_acc, first_trans_acc = self.toy_graph.transition_accuracy(traj)
+            logs[f"{metric_prefix}transition_accuracy"] = ov_trans_acc
+            logs[f"{metric_prefix}first_transition_accuracy"] = first_trans_acc
         super().log(logs)
 
 
@@ -364,7 +370,7 @@ def main(cfg):
         wandb.init(
             project="toy_graph",
             name=training_args.run_name,
-            tags=cfg.tags,
+            tags=tags,
             settings=wandb.Settings(code_dir="."),
             config=cfg_dict,
         )
@@ -377,7 +383,4 @@ def main(cfg):
 
 
 if __name__ == "__main__":
-    main()
-if __name__ == "__main__":
-    main()
     main()
