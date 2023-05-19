@@ -15,14 +15,23 @@ parser.add_argument("--dataset_name", type=str, default="wikitext")
 parser.add_argument("--dataset_config_name", type=str, default="wikitext-103-v1")
 parser.add_argument("--cache_dir", type=str, default="/data/.cache/huggingface/")
 parser.add_argument("--save_dir", type=str, default="/homedir")
+parser.add_argument("--codebooks", type=bool, default=True)
+parser.add_argument("--logging", type=bool, default=False)
 
 args = parser.parse_args()
 
 model = models.wrap_codebook(model_or_path=args.model_name_or_path, pretrained_path=args.pretrained_path)
 if args.hooked_transformer:
     model = models.convert_to_hooked_model(args.model_name_or_path, model)
-# model.disable_logging()
+if not args.logging:
+    model.disable_logging()
 model.eval().to("cuda")
+model.set_hook_kwargs(cosine=True)
+
+if args.codebooks:
+    model.enable_codebooks()
+else:
+    model.disable_codebooks()
 # model = torch.compile(model)
 
 model_args = run_clm.ModelArguments(model_name_or_path=args.model_name_or_path, cache_dir=args.cache_dir)

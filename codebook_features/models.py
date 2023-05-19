@@ -167,12 +167,12 @@ class BaseSnapFunction(torch.autograd.Function):
             # straight through estimator
             grad_inputs = grad_outputs + 2 * beta * (inputs - outputs)
 
-        return grad_inputs, grad_codebook, None
+        return grad_inputs, grad_codebook, None, None
 
 
 class InnerProductSnapFunction(BaseSnapFunction):
     @staticmethod
-    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor, hook_kwargs):
+    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor, kcodes, hook_kwargs):
         """Compute output of the snap function with the maximum inner product
         as the similarity metric.
 
@@ -188,29 +188,34 @@ class InnerProductSnapFunction(BaseSnapFunction):
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
         logits = torch.matmul(inputs, codebook.T)
+        if hook_kwargs["cosine"]:
+            logits = logits / (
+                torch.norm(inputs, dim=-1, keepdim=True)
+                * torch.norm(codebook, dim=-1, keepdim=True).T
+            )
         if hook_kwargs["keep_k_codes"]:
             if hook_kwargs["disable_for_tkns"] == "all":
                 logits[:, :, hook_kwargs["disable_codes"]] = float("-inf")
                 _, codebook_ids = logits.topk(
-                    BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1
+                    kcodes + hook_kwargs["disable_topk"], dim=-1
                 )
-                codebook_ids = codebook_ids[:, :, -BaseSnapFunction.k :]
+                codebook_ids = codebook_ids[:, :, -kcodes :]
             else:
                 for code in hook_kwargs["disable_codes"]:
                     logits[:, hook_kwargs["disable_for_tkns"], code] = float("-inf")
                 _, codebook_ids_all = logits.topk(
-                    BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1
+                    kcodes + hook_kwargs["disable_topk"], dim=-1
                 )
-                codebook_ids = codebook_ids_all[:, :, : BaseSnapFunction.k]
+                codebook_ids = codebook_ids_all[:, :, : kcodes]
                 codebook_ids[:, hook_kwargs["disable_for_tkns"]] = codebook_ids_all[
-                    :, hook_kwargs["disable_for_tkns"], -BaseSnapFunction.k :
+                    :, hook_kwargs["disable_for_tkns"], -kcodes :
                 ]
             # enable gradient so that outputs.grad_fn can be used in backward pass.
             with torch.enable_grad():
                 outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-                outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+                outputs = outputs.sum(dim=-2) / kcodes
         else:
-            _, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
+            _, codebook_ids = logits.topk(kcodes, dim=-1)
             input_codes = torch.nn.functional.embedding(codebook_ids, codebook)
             if hook_kwargs["disable_for_tkns"] == "all":
                 unblock_tkns = torch.zeros(
@@ -222,13 +227,14 @@ class InnerProductSnapFunction(BaseSnapFunction):
                 )
                 unblock_tkns[hook_kwargs["disable_for_tkns"]] = False
             block_idx = torch.isin(
-                codebook_ids, torch.tensor(hook_kwargs["disable_codes"])
+                codebook_ids, torch.tensor(hook_kwargs["disable_codes"], device=codebook_ids.device)
             )
             block_idx[:, :, : hook_kwargs["disable_topk"]] = True
             block_idx[:, unblock_tkns, :] = False
+            block_idx[:, :, hook_kwargs["disable_sim_idx"]] = True
             codebook_ids[block_idx] = -1
             input_codes[block_idx] = 0
-            outputs = input_codes.sum(dim=-2) / BaseSnapFunction.k
+            outputs = input_codes.sum(dim=-2) / kcodes
 
         ctx.save_for_backward(inputs, codebook, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
@@ -239,7 +245,7 @@ class InnerProductSnapFunction(BaseSnapFunction):
 
 class EuclideanSnapFunction(BaseSnapFunction):
     @staticmethod
-    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor, hook_kwargs):
+    def forward(ctx, inputs: torch.Tensor, codebook: torch.Tensor, kcodes, hook_kwargs):
         """Compute output of the snap function with the minimum euclidean
         distance as the similarity metric.
 
@@ -259,25 +265,25 @@ class EuclideanSnapFunction(BaseSnapFunction):
             if hook_kwargs["disable_for_tkns"] == "all":
                 logits[:, :, hook_kwargs["disable_codes"]] = float("-inf")
                 _, codebook_ids = logits.topk(
-                    BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1
+                    kcodes + hook_kwargs["disable_topk"], dim=-1
                 )
-                codebook_ids = codebook_ids[:, :, -BaseSnapFunction.k :]
+                codebook_ids = codebook_ids[:, :, -kcodes :]
             else:
                 for code in hook_kwargs["disable_codes"]:
                     logits[:, hook_kwargs["disable_for_tkns"], code] = float("-inf")
                 _, codebook_ids_all = logits.topk(
-                    BaseSnapFunction.k + hook_kwargs["disable_topk"], dim=-1
+                    kcodes + hook_kwargs["disable_topk"], dim=-1
                 )
-                codebook_ids = codebook_ids_all[:, :, : BaseSnapFunction.k]
+                codebook_ids = codebook_ids_all[:, :, : kcodes]
                 codebook_ids[:, hook_kwargs["disable_for_tkns"]] = codebook_ids_all[
-                    :, hook_kwargs["disable_for_tkns"], -BaseSnapFunction.k :
+                    :, hook_kwargs["disable_for_tkns"], -kcodes :
                 ]
             # enable gradient so that outputs.grad_fn can be used in backward pass.
             with torch.enable_grad():
                 outputs = torch.nn.functional.embedding(codebook_ids, codebook)
-                outputs = outputs.sum(dim=-2) / BaseSnapFunction.k
+                outputs = outputs.sum(dim=-2) / kcodes
         else:
-            _, codebook_ids = logits.topk(BaseSnapFunction.k, dim=-1)
+            _, codebook_ids = logits.topk(kcodes, dim=-1)
             input_codes = torch.nn.functional.embedding(codebook_ids, codebook)
             if hook_kwargs["disable_for_tkns"] == "all":
                 unblock_tkns = torch.zeros(
@@ -289,13 +295,13 @@ class EuclideanSnapFunction(BaseSnapFunction):
                 )
                 unblock_tkns[hook_kwargs["disable_for_tkns"]] = False
             block_idx = torch.isin(
-                codebook_ids, torch.tensor(hook_kwargs["disable_codes"])
+                codebook_ids, torch.tensor(hook_kwargs["disable_codes"], device=codebook_ids.device)
             )
             block_idx[:, :, : hook_kwargs["disable_topk"]] = True
             block_idx[:, unblock_tkns, :] = False
             codebook_ids[block_idx] = -1
             input_codes[block_idx] = 0
-            outputs = input_codes.sum(dim=-2) / BaseSnapFunction.k
+            outputs = input_codes.sum(dim=-2) / kcodes
 
         ctx.save_for_backward(inputs, codebook, outputs)
         # detach & clone outputs since the returned tensor's grad_fn will be
@@ -360,6 +366,7 @@ class CodebookLayer(nn.Module):
         hook_fn: Callable = None,
         kmeans_init=False,
         kmeans_kwargs: dict = {},
+        kcodes=1,
         **kwargs,
     ):
         """Create the codebook layer.
@@ -387,6 +394,7 @@ class CodebookLayer(nn.Module):
         self.snap_fn = snap_fn
         self.hook_fn = hook_fn
         self.key = key
+        self.kcodes = kcodes
         self.reconstruction_mse = 0
         self.input_norm = 0
         self.output_norm = 0
@@ -447,11 +455,18 @@ class CodebookLayer(nn.Module):
         if not self.soft_snap:
             # Hard choice of a single codebook vector
             output, codebook_ids = self.snap_fn.apply(
-                self.ln(x), self.codebook.weight, self.hook_kwargs
+                self.ln(x), self.codebook.weight, self.kcodes, self.hook_kwargs,
             )
             codebook_ids = self.hook_codebook_ids(codebook_ids)
             if not self.training:
-                output = self.codebook(codebook_ids).mean(dim=-2)
+                block_idx = torch.isin(codebook_ids, -1)
+                # TODO: clean this.
+                # change -1 to 0 and zero ablate the blocked codes before computing mean
+                codebook_ids[block_idx] = 0
+                output = self.codebook(codebook_ids)
+                output[block_idx] = 0
+                output = output.mean(dim=-2)
+                codebook_ids[block_idx] = -1
 
             # update metrics
             # self.counts.update(codebook_ids.cpu().numpy().flat)
@@ -503,7 +518,7 @@ class CodebookLayer(nn.Module):
     def set_hook_kwargs(self, **kwargs):
         self.hook_kwargs = {**self.hook_kwargs, **kwargs}
         assert all(
-            k in ["disable_topk", "disable_codes", "disable_for_tkns", "keep_k_codes"]
+            k in ["disable_topk", "disable_codes", "disable_for_tkns", "keep_k_codes", "disable_sim_idx", "cosine"]
             for k in self.hook_kwargs
         )
 
@@ -513,6 +528,8 @@ class CodebookLayer(nn.Module):
             "disable_codes": [],
             "disable_for_tkns": "all",
             "keep_k_codes": True,
+            "disable_sim_idx": [],
+            "cosine": False,
         }
 
     def reset_metrics(self):
@@ -699,6 +716,7 @@ class CompositionalCodebookLayer(nn.Module):
         num_codebooks: int = 1,
         hook_fn: Callable = None,
         kmeans_kwargs: dict = {},
+        kcodes: int = 1,
     ):
         """Create the compositional codebook layer.
 
@@ -732,6 +750,7 @@ class CompositionalCodebookLayer(nn.Module):
                     snap_fn=snap_fn,
                     hook_fn=hook_fn,
                     kmeans_kwargs={**kmeans_kwargs, "random_state": seed + i},
+                    kcodes=kcodes,
                 )
                 for i in range(num_codebooks)
             ]
@@ -802,7 +821,7 @@ class CompositionalCodebookLayer(nn.Module):
         Returns: output with the feature vectors replaced using the compositional codebook.
         """
         if len(x.shape) == 4:
-            assert x.shape[2] == self.num_codebooks
+            assert x.shape[2] == self.num_codebooks, f"{x.shape}; num_cbs: {self.num_codebooks}"
             output = torch.stack(
                 [self.codebook[i](x[:, :, i]) for i in range(self.num_codebooks)], dim=2
             )
@@ -818,9 +837,12 @@ class CompositionalCodebookLayer(nn.Module):
             )
             return output
 
-    def set_hook_kwargs(self, idx=None, **kwargs):
-        if idx is not None:
-            self.codebook[idx].set_hook_kwargs(**kwargs)
+    def set_hook_kwargs(self, head_idx=None, **kwargs):
+        if head_idx is not None:
+            if type(head_idx) == int:
+                head_idx = [head_idx]
+            for i in head_idx:
+                self.codebook[i].set_hook_kwargs(**kwargs)
             return
         for codebook in self.codebook:
             codebook.set_hook_kwargs(**kwargs)
@@ -1211,14 +1233,14 @@ class CodebookModelConfig(transformers.PretrainedConfig):
 
     def __init__(
         self,
-        codebook_type="vanilla",
+        codebook_type: Union[str, Sequence] ="vanilla",
         num_codes: int = 100,
-        num_codebooks: int = 1,
+        num_codebooks: Union[int, Sequence] = 1,
         layers_to_snap: Sequence = (),
         similarity_metric: str = "inner_product",
         codebook_at: Union[str, Sequence] = "mlp",
         loss: str = "base",
-        k_codebook: int = 1,
+        k_codebook: Union[int, Sequence] = 1,
         kmeans_init: bool = False,
         kmeans_init_examples: int = 1000,
         kmeans_path: str = None,
@@ -1239,10 +1261,17 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             k_codebook: number of nearest neighbors in codebook snapping.
         """
         super().__init__(**kwargs)
-        if codebook_type not in ["vanilla", "compositional", "grouped"]:
-            raise ValueError(f"Invalid codebook type {codebook_type}")
-        if codebook_type == "vanilla" and num_codebooks != 1:
-            raise ValueError("Vanilla codebook type can only have 1 codebook.")
+        if type(codebook_type) == str:
+            codebook_type = [codebook_type]
+        if type(num_codebooks) == int:
+            num_codebooks = [num_codebooks] * len(codebook_type)
+        if type(k_codebook) == int:
+            k_codebook = [k_codebook] * len(codebook_type)
+        for i in range(len(codebook_type)):
+            if codebook_type[i] not in ["vanilla", "compositional", "grouped"]:
+                raise ValueError(f"Invalid codebook type {i_cb_type}")
+            if codebook_type[i] == "vanilla" and num_codebooks[i] != 1:
+                raise ValueError("Vanilla codebook type can only have 1 codebook.")
 
         if loss.split("-")[0] not in ["base", "aeloss", "fullaeloss", "vqvae"]:
             raise ValueError(f"Invalid loss {loss}")
@@ -1283,18 +1312,20 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             model: torch model to apply codebooks to.
         """
         super().__init__(config=config)
-        if config.codebook_type == "vanilla":
-            self.codebook_cls = CodebookLayer
-        elif config.codebook_type == "compositional":
-            self.codebook_cls = CompositionalCodebookLayer
-        elif config.codebook_type == "grouped":
-            self.codebook_cls = GroupedCodebookLayer
+        self.codebook_cls = []
+        for cb_type in config.codebook_type:
+            if cb_type == "vanilla":
+                self.codebook_cls.append(CodebookLayer)
+            elif cb_type == "compositional":
+                self.codebook_cls.append(CompositionalCodebookLayer)
+            elif cb_type == "grouped":
+                self.codebook_cls.append(GroupedCodebookLayer)
 
         self.model = model
         self.model_params = list(model.parameters())
-
-        if self.config.num_codebooks == -1:
-            self.config.num_codebooks = self.num_heads
+        for i in range(len(self.config.num_codebooks)):
+            if self.config.num_codebooks[i] == -1:
+                self.config.num_codebooks[i] = self.num_heads
         num_layers = self.num_layers()
         if (
             type(self.config.layers_to_snap) is str
@@ -1314,7 +1345,6 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.all_codebook_wrappers = {}
         # self.freeze_model_params()
         BaseSnapFunction.loss = self.config.loss
-        BaseSnapFunction.k = self.config.k_codebook
         if self.config.similarity_metric == "euclidean":
             self.snap_fn = EuclideanSnapFunction
         elif self.config.similarity_metric == "inner_product":
@@ -1329,6 +1359,9 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             return super().__getattr__(name)
         except AttributeError:
             return getattr(self.model, name)
+        
+    def generate(self, *args, **kwargs):
+        return self.model.generate(*args, **kwargs)
 
     @property
     def device(self):
@@ -1347,20 +1380,21 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         for i in range(len(layers)):
             if i in self.config.layers_to_snap:
                 codebooks_in_layer = []
-                if "transformer_block" in self.config.codebook_at:
-                    self.codebook_at_transformer(layers, i, codebooks_in_layer)
-                if "mlp" in self.config.codebook_at:
-                    self.codebook_at_mlp(layers, i, codebooks_in_layer)
-                if "mlp_mid" in self.config.codebook_at:
-                    self.codebook_at_mlp_mid(layers, i, codebooks_in_layer)
-                if "qkv" in self.config.codebook_at:
-                    self.codebook_at_qkv(layers, i, codebooks_in_layer)
-                if "attention" in self.config.codebook_at:
-                    self.codebook_at_attention(layers, i, codebooks_in_layer)
-                if "preproj_attention" in self.config.codebook_at:
-                    self.codebook_at_preprojection_attn(layers, i, codebooks_in_layer)
-                if "attention_and_mlp" in self.config.codebook_at:
-                    self.codebook_at_attention_plus_mlp(layers, i, codebooks_in_layer)
+                for i_cb, cb_at in enumerate(self.config.codebook_at):
+                    if cb_at == "transformer_block":
+                        self.codebook_at_transformer(layers, i, codebooks_in_layer, i_cb)
+                    if cb_at == "mlp":
+                        self.codebook_at_mlp(layers, i, codebooks_in_layer, i_cb)
+                    if cb_at == "mlp_mid":
+                        self.codebook_at_mlp_mid(layers, i, codebooks_in_layer, i_cb)
+                    if cb_at == "qkv":
+                        self.codebook_at_qkv(layers, i, codebooks_in_layer, i_cb)
+                    if cb_at == "attention":
+                        self.codebook_at_attention(layers, i, codebooks_in_layer, i_cb)
+                    if cb_at == "preproj_attention":
+                        self.codebook_at_preprojection_attn(layers, i, codebooks_in_layer, i_cb)
+                    if cb_at == "attention_and_mlp":
+                        self.codebook_at_attention_plus_mlp(layers, i, codebooks_in_layer, i_cb)
 
                 if len(codebooks_in_layer) == 0:
                     raise ValueError(
@@ -1368,34 +1402,36 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                     )
                 self.all_codebook_wrappers[i] = codebooks_in_layer
 
-    def codebook_at_transformer(self, layers, i, codebooks_in_layer):
+    def codebook_at_transformer(self, layers, i, codebooks_in_layer, i_cb):
         layers[i] = TransformerLayerWrapper(
             layers[i],
-            codebook_cls=self.codebook_cls,
+            codebook_cls=self.codebook_cls[i_cb],
             dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_tb",
             snap_fn=self.snap_fn,
-            num_codebooks=self.config.num_codebooks,
+            num_codebooks=self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
+            kcodes=self.config.k_codebook[i_cb],
         )
         self.codebook_params += list(
             layers[i].codebook_layer.codebook.parameters(),
         )
         codebooks_in_layer.append(layers[i])
 
-    def codebook_at_mlp(self, layers, i, codebooks_in_layer):
+    def codebook_at_mlp(self, layers, i, codebooks_in_layer, i_cb):
         wrapped_mlp = MLPWrapper(
             layers[i].__getattr__(self.mlp_key),
-            codebook_cls=self.codebook_cls,
+            codebook_cls=self.codebook_cls[i_cb],
             dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_mlp",
             snap_fn=self.snap_fn,
-            num_codebooks=self.config.num_codebooks,
+            num_codebooks=self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
+            kcodes=self.config.k_codebook[i_cb],
         )
         layers[i].__setattr__(self.mlp_key, wrapped_mlp)
         self.codebook_params += list(
@@ -1403,18 +1439,19 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         )
         codebooks_in_layer.append(wrapped_mlp)
 
-    def codebook_at_mlp_mid(self, layers, i, codebooks_in_layer):
+    def codebook_at_mlp_mid(self, layers, i, codebooks_in_layer, i_cb):
         mlp = layers[i].__getattr__(self.mlp_key)
         wrapped_hidden_layer = MLPWrapper(
             mlp.__getattr__(self.mlp_mid_key),
-            codebook_cls=self.codebook_cls,
+            codebook_cls=self.codebook_cls[i_cb],
             dim=self.itermediate_size(),
             num_codes=self.config.num_codes,
             key=f"layer{i}_mlp_mid",
             snap_fn=self.snap_fn,
-            num_codebooks=self.config.num_codebooks,
+            num_codebooks=self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
+            kcodes=self.config.k_codebook[i_cb],
         )
         mlp.__setattr__(self.mlp_mid_key, wrapped_hidden_layer)
         self.codebook_params += list(
@@ -1422,7 +1459,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         )
         codebooks_in_layer.append(wrapped_hidden_layer)
 
-    def codebook_at_qkv(self, layers, i, codebooks_in_layer):
+    def codebook_at_qkv(self, layers, i, codebooks_in_layer, i_cb):
         attn = layers[i].__getattr__(self.attention_key)
         qkv = attn.__getattr__(self.qkv_key)
         wrapped_hidden_layer = MLPWrapper(
@@ -1432,9 +1469,10 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             num_codes=self.config.num_codes,
             key=f"layer{i}_qkv",
             snap_fn=self.snap_fn,
-            num_codebooks=3 * self.config.num_codebooks,
+            num_codebooks=3 * self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
+            kcodes=self.config.k_codebook[i_cb],
         )
         attn.__setattr__(self.qkv_key, wrapped_hidden_layer)
         self.codebook_params += list(
@@ -1442,17 +1480,18 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         )
         codebooks_in_layer.append(wrapped_hidden_layer)
 
-    def codebook_at_attention(self, layers, i, codebooks_in_layer):
+    def codebook_at_attention(self, layers, i, codebooks_in_layer, i_cb):
         wrapped_attn = TransformerLayerWrapper(
             layers[i].__getattr__(self.attention_key),
-            codebook_cls=self.codebook_cls,
+            codebook_cls=self.codebook_cls[i_cb],
             dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_attn",
             snap_fn=self.snap_fn,
-            num_codebooks=self.config.num_codebooks,
+            num_codebooks=self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
+            kcodes=self.config.k_codebook[i_cb],
         )
         layers[i].__setattr__(self.attention_key, wrapped_attn)
         self.codebook_params += list(
@@ -1460,15 +1499,16 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         )
         codebooks_in_layer.append(wrapped_attn)
 
-    def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer):
-        codebook = self.codebook_cls(
+    def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer, i_cb):
+        codebook = self.codebook_cls[i_cb](
             dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_attn_preproj",
             snap_fn=self.snap_fn,
-            num_codebooks=self.config.num_codebooks,
+            num_codebooks=self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
+            kcodes=self.config.k_codebook[i_cb],
         )
         new_block = self.pre_projection_attn_codebook_cls(
             self.base_model_cfg(),
@@ -1482,15 +1522,16 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         )
         layers[i].__setattr__(self.attention_key, new_block)
 
-    def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer):
-        codebook = self.codebook_cls(
+    def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer, i_cb):
+        codebook = self.codebook_cls[i_cb](
             dim=self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_attn+mlp",
             snap_fn=self.snap_fn,
-            num_codebooks=self.config.num_codebooks,
+            num_codebooks=self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
+            kcodes=self.config.k_codebook[i_cb],
         )
         pre_res_block = self.pre_residual_codebook_cls(
             self.base_model_cfg(),
@@ -1533,8 +1574,12 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def set_hook_kwargs(self, idx=None, **kwargs):
         if idx is not None:
-            for layer in list(self.all_codebooks.values())[idx]:
-                layer.set_hook_kwargs(**kwargs)
+            if type(idx) == int:
+                idx = [idx]
+            for i in idx:
+                layers = self.all_codebooks[i]
+                for layer in layers:
+                    layer.set_hook_kwargs(**kwargs)
             return
         for i, layers in self.all_codebooks.items():
             for layer in layers:
@@ -2047,6 +2092,36 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs={}):
         model_path,
         **hooked_kwargs,
     )
+    if "device" in hooked_kwargs:
+        hooked_kwargs.pop("device")
+    state_dict = convert_state_dict(orig_cb_model.model, model.cfg)
+    model.load_and_process_state_dict(
+        state_dict,
+        **hooked_kwargs,
+    )
+    cb_model = HookedTransformerCodebookModel(
+        orig_cb_model.config, model, orig_cb_model.model.config
+    )
+    cb_sd = {}
+
+    for key, value in orig_cb_model.model.state_dict().items():
+        if "codebook" in key:
+            key = key.replace(orig_cb_model.attention_key, cb_model.attention_key)
+            key = key.replace(orig_cb_model.mlp_key, cb_model.mlp_key)
+            split_key = re.split(r"(\d+)", key)
+            split_key[0] = "blocks."
+            cb_sd["".join(split_key)] = value
+    _, unexpected = cb_model.model.load_state_dict(cb_sd, strict=False)
+    assert len(unexpected) == 0
+    cb_model.model.setup()
+    return cb_model
+
+
+def convert_to_hooked_model_for_toy(model_path, orig_cb_model, config, hooked_kwargs={}):
+    """Wraps a hooked tranformer model with codebooks."""
+    import transformer_lens.loading_from_pretrained as loading
+    hooked_config = loading.convert_hf_model_config(model_path, config)
+    model = transformer_lens.HookedTransformer(hooked_config)
     if "device" in hooked_kwargs:
         hooked_kwargs.pop("device")
     state_dict = convert_state_dict(orig_cb_model.model, model.cfg)

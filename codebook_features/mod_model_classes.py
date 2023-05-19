@@ -230,12 +230,13 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
 
     def forward(
         self,
-        hidden_states,
-        attention_mask,
-        head_mask=None,
-        layer_past=None,
-        use_cache=False,
-        output_attentions=False,
+        hidden_states: torch.FloatTensor,
+        attention_mask: torch.FloatTensor,
+        position_ids: torch.LongTensor,
+        head_mask: Optional[torch.FloatTensor] = None,
+        layer_past: Optional[Tuple[torch.Tensor]] = None,
+        use_cache: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
     ):
         has_layer_past = layer_past is not None
 
@@ -262,14 +263,10 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
 
         # Compute token offset for rotary embeddings (when decoding)
         seq_len = key.shape[-2]
-        offset = 0
         if has_layer_past:
-            offset = layer_past[0].shape[-2]
-            seq_len += offset
+            seq_len += layer_past[0].shape[-2]
         cos, sin = self.rotary_emb(value, seq_len=seq_len)
-        query, key = modeling_gpt_neox.apply_rotary_pos_emb(
-            query_rot, key_rot, cos, sin, offset=offset
-        )
+        query, key = modeling_gpt_neox.apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
         query = torch.cat((query, query_pass), dim=-1)
         key = torch.cat((key, key_pass), dim=-1)
 
@@ -301,7 +298,6 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
             outputs += (attn_weights,)
 
         return outputs
-
 
 
 class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
