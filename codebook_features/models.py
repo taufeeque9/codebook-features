@@ -199,16 +199,16 @@ class InnerProductSnapFunction(BaseSnapFunction):
                 _, codebook_ids = logits.topk(
                     kcodes + hook_kwargs["disable_topk"], dim=-1
                 )
-                codebook_ids = codebook_ids[:, :, -kcodes :]
+                codebook_ids = codebook_ids[:, :, -kcodes:]
             else:
                 for code in hook_kwargs["disable_codes"]:
                     logits[:, hook_kwargs["disable_for_tkns"], code] = float("-inf")
                 _, codebook_ids_all = logits.topk(
                     kcodes + hook_kwargs["disable_topk"], dim=-1
                 )
-                codebook_ids = codebook_ids_all[:, :, : kcodes]
+                codebook_ids = codebook_ids_all[:, :, :kcodes]
                 codebook_ids[:, hook_kwargs["disable_for_tkns"]] = codebook_ids_all[
-                    :, hook_kwargs["disable_for_tkns"], -kcodes :
+                    :, hook_kwargs["disable_for_tkns"], -kcodes:
                 ]
             # enable gradient so that outputs.grad_fn can be used in backward pass.
             with torch.enable_grad():
@@ -227,7 +227,8 @@ class InnerProductSnapFunction(BaseSnapFunction):
                 )
                 unblock_tkns[hook_kwargs["disable_for_tkns"]] = False
             block_idx = torch.isin(
-                codebook_ids, torch.tensor(hook_kwargs["disable_codes"], device=codebook_ids.device)
+                codebook_ids,
+                torch.tensor(hook_kwargs["disable_codes"], device=codebook_ids.device),
             )
             block_idx[:, :, : hook_kwargs["disable_topk"]] = True
             block_idx[:, unblock_tkns, :] = False
@@ -267,16 +268,16 @@ class EuclideanSnapFunction(BaseSnapFunction):
                 _, codebook_ids = logits.topk(
                     kcodes + hook_kwargs["disable_topk"], dim=-1
                 )
-                codebook_ids = codebook_ids[:, :, -kcodes :]
+                codebook_ids = codebook_ids[:, :, -kcodes:]
             else:
                 for code in hook_kwargs["disable_codes"]:
                     logits[:, hook_kwargs["disable_for_tkns"], code] = float("-inf")
                 _, codebook_ids_all = logits.topk(
                     kcodes + hook_kwargs["disable_topk"], dim=-1
                 )
-                codebook_ids = codebook_ids_all[:, :, : kcodes]
+                codebook_ids = codebook_ids_all[:, :, :kcodes]
                 codebook_ids[:, hook_kwargs["disable_for_tkns"]] = codebook_ids_all[
-                    :, hook_kwargs["disable_for_tkns"], -kcodes :
+                    :, hook_kwargs["disable_for_tkns"], -kcodes:
                 ]
             # enable gradient so that outputs.grad_fn can be used in backward pass.
             with torch.enable_grad():
@@ -295,7 +296,8 @@ class EuclideanSnapFunction(BaseSnapFunction):
                 )
                 unblock_tkns[hook_kwargs["disable_for_tkns"]] = False
             block_idx = torch.isin(
-                codebook_ids, torch.tensor(hook_kwargs["disable_codes"], device=codebook_ids.device)
+                codebook_ids,
+                torch.tensor(hook_kwargs["disable_codes"], device=codebook_ids.device),
             )
             block_idx[:, :, : hook_kwargs["disable_topk"]] = True
             block_idx[:, unblock_tkns, :] = False
@@ -455,7 +457,10 @@ class CodebookLayer(nn.Module):
         if not self.soft_snap:
             # Hard choice of a single codebook vector
             output, codebook_ids = self.snap_fn.apply(
-                self.ln(x), self.codebook.weight, self.kcodes, self.hook_kwargs,
+                self.ln(x),
+                self.codebook.weight,
+                self.kcodes,
+                self.hook_kwargs,
             )
             codebook_ids = self.hook_codebook_ids(codebook_ids)
             if not self.training:
@@ -518,7 +523,15 @@ class CodebookLayer(nn.Module):
     def set_hook_kwargs(self, **kwargs):
         self.hook_kwargs = {**self.hook_kwargs, **kwargs}
         assert all(
-            k in ["disable_topk", "disable_codes", "disable_for_tkns", "keep_k_codes", "disable_sim_idx", "cosine"]
+            k
+            in [
+                "disable_topk",
+                "disable_codes",
+                "disable_for_tkns",
+                "keep_k_codes",
+                "disable_sim_idx",
+                "cosine",
+            ]
             for k in self.hook_kwargs
         )
 
@@ -821,7 +834,9 @@ class CompositionalCodebookLayer(nn.Module):
         Returns: output with the feature vectors replaced using the compositional codebook.
         """
         if len(x.shape) == 4:
-            assert x.shape[2] == self.num_codebooks, f"{x.shape}; num_cbs: {self.num_codebooks}"
+            assert (
+                x.shape[2] == self.num_codebooks
+            ), f"{x.shape}; num_cbs: {self.num_codebooks}"
             output = torch.stack(
                 [self.codebook[i](x[:, :, i]) for i in range(self.num_codebooks)], dim=2
             )
@@ -1233,7 +1248,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
 
     def __init__(
         self,
-        codebook_type: Union[str, Sequence] ="vanilla",
+        codebook_type: Union[str, Sequence] = "vanilla",
         num_codes: int = 100,
         num_codebooks: Union[int, Sequence] = 1,
         layers_to_snap: Sequence = (),
@@ -1269,7 +1284,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             k_codebook = [k_codebook] * len(codebook_type)
         for i in range(len(codebook_type)):
             if codebook_type[i] not in ["vanilla", "compositional", "grouped"]:
-                raise ValueError(f"Invalid codebook type {i_cb_type}")
+                raise ValueError(f"Invalid codebook type {codebook_type[i]}")
             if codebook_type[i] == "vanilla" and num_codebooks[i] != 1:
                 raise ValueError("Vanilla codebook type can only have 1 codebook.")
 
@@ -1359,7 +1374,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             return super().__getattr__(name)
         except AttributeError:
             return getattr(self.model, name)
-        
+
     def generate(self, *args, **kwargs):
         return self.model.generate(*args, **kwargs)
 
@@ -1382,7 +1397,9 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 codebooks_in_layer = []
                 for i_cb, cb_at in enumerate(self.config.codebook_at):
                     if cb_at == "transformer_block":
-                        self.codebook_at_transformer(layers, i, codebooks_in_layer, i_cb)
+                        self.codebook_at_transformer(
+                            layers, i, codebooks_in_layer, i_cb
+                        )
                     if cb_at == "mlp":
                         self.codebook_at_mlp(layers, i, codebooks_in_layer, i_cb)
                     if cb_at == "mlp_mid":
@@ -1392,9 +1409,13 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                     if cb_at == "attention":
                         self.codebook_at_attention(layers, i, codebooks_in_layer, i_cb)
                     if cb_at == "preproj_attention":
-                        self.codebook_at_preprojection_attn(layers, i, codebooks_in_layer, i_cb)
+                        self.codebook_at_preprojection_attn(
+                            layers, i, codebooks_in_layer, i_cb
+                        )
                     if cb_at == "attention_and_mlp":
-                        self.codebook_at_attention_plus_mlp(layers, i, codebooks_in_layer, i_cb)
+                        self.codebook_at_attention_plus_mlp(
+                            layers, i, codebooks_in_layer, i_cb
+                        )
 
                 if len(codebooks_in_layer) == 0:
                     raise ValueError(
@@ -2117,9 +2138,12 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs={}):
     return cb_model
 
 
-def convert_to_hooked_model_for_toy(model_path, orig_cb_model, config, hooked_kwargs={}):
+def convert_to_hooked_model_for_toy(
+    model_path, orig_cb_model, config, hooked_kwargs={}
+):
     """Wraps a hooked tranformer model with codebooks."""
     import transformer_lens.loading_from_pretrained as loading
+
     hooked_config = loading.convert_hf_model_config(model_path, config)
     model = transformer_lens.HookedTransformer(hooked_config)
     if "device" in hooked_kwargs:

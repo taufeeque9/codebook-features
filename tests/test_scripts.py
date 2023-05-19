@@ -6,8 +6,7 @@ import pytest
 import torch
 import transformers
 
-import codebook_features.train_codebook
-from codebook_features import models, run_clm
+from codebook_features import models, run_clm, train_codebook, train_toy_model
 
 
 class GradientCheckerOptimizer(torch.optim.AdamW):
@@ -26,9 +25,17 @@ def test_train_codebook(config_name):
     with hydra.initialize_config_module(
         version_base=None, config_module="codebook_features.config"
     ):
-        # cfg = compose(config_name="test", overrides=["app.user=test_user"])
         cfg = hydra.compose(config_name=config_name)
-        ret = codebook_features.train_codebook.main(cfg)
+        ret = train_codebook.main(cfg)
+        assert ret is not None
+
+
+def test_train_toy_codebook():
+    with hydra.initialize_config_module(
+        version_base=None, config_module="codebook_features.config"
+    ):
+        cfg = hydra.compose(config_name="test_toy")
+        ret = train_toy_model.main(cfg)
         assert ret is not None
 
 
@@ -67,5 +74,5 @@ def test_model_saving():
             cfg.get_baseline = False
             cfg.training_args.save_steps = 1
             cfg.training_args.max_steps = 4
-        ret = codebook_features.train_codebook.main(cfg)
+        ret = train_codebook.main(cfg)
         assert ret is not None

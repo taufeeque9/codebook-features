@@ -1,0 +1,69 @@
+training_args:
+  run_name: toy_model
+  output_dir: output_tou
+  overwrite_output_dir: True
+  do_train: True
+  do_eval: True
+  per_device_train_batch_size: 512
+  per_device_eval_batch_size: 512
+  learning_rate: 1e-3
+  warmup_ratio: 0.0
+  lr_scheduler_type: constant
+  max_steps: 20000
+  logging_first_step: True
+  logging_steps: 500
+  evaluation_strategy: steps
+  eval_steps: 500
+  save_steps: 10000
+  ddp_find_unused_parameters: False
+
+  train_model_params: True
+  model_lr_factor: 1
+  codebook_reg_p: null
+  codebook_weight_decay: 0.01
+
+codebook_args:
+  codebook_at: ["preproj_attention", "mlp"]
+  codebook_type: ["compositional", "vanilla"]
+  num_codebooks: [-1, 1]
+  k_codebook: [1,1]
+  num_codes: 1000
+  layers_to_snap: all
+  similarity_metric: inner_product
+  loss: aeloss
+  kmeans_init: False
+  # kmeans_path: /.cache/cb_volume/huggingface/kmeans_embeddings.pt
+  # kmeans_init_examples: 1000
+  # kmeans_kwargs:
+  #   n_init: auto
+  #   batch_size: 24576
+
+k_scheduler_kwargs: null
+#   k_max: 10000
+#   decay_steps: 5000
+
+toy_dataset_args:
+  num_states: 100
+  num_edges: 10
+  seed: 42
+
+model_config_args:
+  model_type: gptneox
+  hidden_size: 128
+  intermediate_size: 512
+  num_hidden_layers: 4
+  num_attention_heads: 4
+  rotary_emb_base: 10000
+  seq_len: 128
+  vocab_size: 11
+
+
+
+apply_codebook: True
+disable_logging: False
+wandb_charts: False
+pretrained_path: null
+get_baseline: False
+tag_keys: []
+tags: [codebook_type, num_codebooks, k_codebook, loss]
+project: gpt2-codebook
