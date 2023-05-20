@@ -1,6 +1,6 @@
 training_args:
   run_name: toy_model
-  output_dir: output_tou
+  output_dir: output_toy
   overwrite_output_dir: True
   do_train: True
   do_eval: True
@@ -16,6 +16,7 @@ training_args:
   eval_steps: 500
   save_steps: 10000
   ddp_find_unused_parameters: False
+  dataloader_num_workers: 8
 
   train_model_params: True
   model_lr_factor: 1
@@ -46,6 +47,7 @@ toy_dataset_args:
   num_states: 100
   num_edges: 10
   seed: 42
+  max_eval_samples: 2048
 
 model_config_args:
   model_type: gptneox
@@ -64,6 +66,6 @@ disable_logging: False
 wandb_charts: False
 pretrained_path: null
 get_baseline: False
-tag_keys: []
-tags: [codebook_type, num_codebooks, k_codebook, loss]
+tag_keys: [codebook_type, num_codebooks, k_codebook, loss]
+tags: ["toy_main"]
 project: gpt2-codebook

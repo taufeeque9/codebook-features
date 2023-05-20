@@ -51,7 +51,6 @@ k_scheduler_kwargs: null
 #   decay_steps: 5000
 
 disable_logging: False
-wandb_charts: False
 pretrained_path: null
 get_baseline: False
 tag_keys: []

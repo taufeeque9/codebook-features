@@ -55,6 +55,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+from codebook_features import models
 from codebook_features import trainer as codebook_trainer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -756,8 +757,10 @@ def run_trainer(
         trainer.save_state()
 
     # Evaluation
-    if training_args.do_eval and not training_args.do_train:
+    if training_args.do_eval:
         logger.info("*** Evaluate ***")
+        if isinstance(trainer.model, models.CodebookModel):
+            trainer.model.enable_logging()
 
         metrics = trainer.evaluate()
 

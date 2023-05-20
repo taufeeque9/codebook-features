@@ -138,7 +138,7 @@ def main(cfg):
         RuntimeWarning("Codebook not found in model. Training with model params.")
         optimizer = None
 
-    callbacks = [cb_trainer.WandbCallback()] if cfg.wandb_charts else []
+    callbacks = [cb_trainer.WandbCallback()]
     if cfg.k_scheduler_kwargs is not None:
         k_scheduler = cb_trainer.MulticodeKScheduler(
             k_min=cfg.codebook_args.k_codebook, **cfg.k_scheduler_kwargs

@@ -67,13 +67,10 @@ class CodebookTrainer(transformers.Trainer):
             logs: log dictionary.
         """
         metric_prefix = ""
-        if all("train_" in k for k in logs.keys()):
-            metric_prefix = "train_"
-        elif all("eval_" in k for k in logs.keys()):
+        if all("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
 
         if isinstance(self.model, models.CodebookModel):
-
             logs[metric_prefix + "multicode_k"] = models.BaseSnapFunction.k
 
             all_codebooks = self.model.all_codebooks
@@ -146,14 +143,15 @@ class CodebookTrainer(transformers.Trainer):
 class WandbCallback(transformers.integrations.WandbCallback):
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
         metric_prefix = ""
-        if all("train_" in k for k in logs.keys()):
-            metric_prefix = "train_"
-        elif all("eval_" in k for k in logs.keys()):
+        for k in list(logs.keys()):
+            if k.startswith("train_"):
+                logs[k[len("train_") :]] = logs.pop(k)
+        if all("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
 
         if (
             isinstance(model, models.CodebookModel)
-            and control.should_evaluate
+            and model.logging
             and args.local_rank <= 0
         ):
             for codebook_idx, codebooks in model.all_codebooks.items():
@@ -186,12 +184,12 @@ class WandbCallback(transformers.integrations.WandbCallback):
 
             model.reset_codebook_metrics()
 
-        if control.should_evaluate and args.local_rank <= 0:
+        if args.local_rank <= 0:
             super().on_log(args, state, control, model, logs, **kwargs)
 
         if (
             isinstance(model, models.CodebookModel)
-            and control.should_evaluate
+            and model.logging
             and args.local_rank <= 0
         ):
             for codebook_idx in model.all_codebooks:
@@ -231,7 +229,9 @@ class MulticodeKScheduler(transformers.TrainerCallback):
 
     def k_scheduler(self, step):
         return int(
-            self.k_max - (self.k_max - self.k_min) * min(1, (step / self.decay_steps)**(1/self.decay_power))
+            self.k_max
+            - (self.k_max - self.k_min)
+            * min(1, (step / self.decay_steps) ** (1 / self.decay_power))
         )
 
     def on_step_begin(

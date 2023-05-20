@@ -1337,6 +1337,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 self.codebook_cls.append(GroupedCodebookLayer)
 
         self.model = model
+        self.logging = True
         self.model_params = list(model.parameters())
         for i in range(len(self.config.num_codebooks)):
             if self.config.num_codebooks[i] == -1:
@@ -1700,11 +1701,13 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 codebook.partial_fit_codebook()
 
     def enable_logging(self):
+        self.logging = True
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
                 codebook.enable_logging()
 
     def disable_logging(self):
+        self.logging = False
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
                 codebook.disable_logging()

@@ -14,6 +14,7 @@ training_args:
   eval_steps: 2
   save_steps: 2
   ddp_find_unused_parameters: False
+  report_to: none
 
   train_model_params: True
   model_lr_factor: 1
@@ -44,6 +45,7 @@ toy_dataset_args:
   num_states: 100
   num_edges: 10
   seed: 42
+  max_eval_samples: 2
 
 model_config_args:
   model_type: gptneox
@@ -61,5 +63,5 @@ wandb_charts: False
 pretrained_path: null
 get_baseline: False
 tag_keys: [codebook_type, num_codebooks, k_codebook, loss]
-tags: []
+tags: ["test_toy"]
 project: gpt2-codebook

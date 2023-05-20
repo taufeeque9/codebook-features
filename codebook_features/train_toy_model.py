@@ -286,7 +286,10 @@ def main(cfg):
         automata, tokenizer=tokenizer, seq_len=config_args.seq_len
     )
     eval_dataset = ToyDataset(
-        automata, tokenizer=tokenizer, seq_len=config_args.seq_len, max_samples=2048
+        automata,
+        tokenizer=tokenizer,
+        seq_len=config_args.seq_len,
+        max_samples=cfg.toy_dataset_args.max_eval_samples,
     )
     if config_args.model_type == "gptneox":
         config = GPTNeoXConfig(
@@ -348,9 +351,7 @@ def main(cfg):
             )
             optimizers = (optimizer, None)
 
-    callbacks = []
-    # if report_to == "all":
-    #     callbacks = [cb_trainer.WandbCallback()]
+    callbacks = [cb_trainer.WandbCallback()]
 
     trainer = ToyModelTrainer(
         toy_graph=automata,
