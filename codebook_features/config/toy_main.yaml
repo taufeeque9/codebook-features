@@ -68,4 +68,3 @@ pretrained_path: null
 get_baseline: False
 tag_keys: [codebook_type, num_codebooks, k_codebook, loss]
 tags: ["toy_main"]
-project: gpt2-codebook

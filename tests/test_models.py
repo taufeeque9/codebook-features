@@ -69,6 +69,7 @@ def test_composition_codebook_layer(codebook_cls, num_codebooks):
         output = layer(input)
         assert output.shape == input.shape
 
+
 def test_evaluate():
     config = models.CodebookModelConfig()
     model_args = run_clm.ModelArguments(model_name_or_path="taufeeque/tiny-gpt2")

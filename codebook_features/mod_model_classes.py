@@ -266,7 +266,9 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
         if has_layer_past:
             seq_len += layer_past[0].shape[-2]
         cos, sin = self.rotary_emb(value, seq_len=seq_len)
-        query, key = modeling_gpt_neox.apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
+        query, key = modeling_gpt_neox.apply_rotary_pos_emb(
+            query_rot, key_rot, cos, sin, position_ids
+        )
         query = torch.cat((query, query_pass), dim=-1)
         key = torch.cat((key, key_pass), dim=-1)
 

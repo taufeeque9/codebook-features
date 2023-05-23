@@ -12,13 +12,8 @@ import omegaconf
 import pandas as pd
 import torch
 from torch.utils.data import IterableDataset
-from transformers import (
-    GPT2Config,
-    GPT2LMHeadModel,
-    GPT2TokenizerFast,
-    GPTNeoXConfig,
-    GPTNeoXForCausalLM,
-)
+from transformers import (GPT2Config, GPT2LMHeadModel, GPT2TokenizerFast,
+                          GPTNeoXConfig, GPTNeoXForCausalLM)
 
 import wandb
 from codebook_features import models, run_clm
@@ -96,7 +91,9 @@ class ToyGraph:
         self.rng = np.random.default_rng(seed=seed)
 
     def save(self, path):
-        np.save(path, self.transition_matrix)
+        path = pathlib.Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        np.save(path / "automata.npy", self.transition_matrix)
 
     @classmethod
     def load(cls, path):
@@ -132,6 +129,9 @@ class ToyGraph:
 
     def nbrs(self, state):
         return np.where(self.transition_matrix[state] != 0)[0]
+
+    def nbrs_to(self, state):
+        return np.where(self.transition_matrix[:, state] != 0)[0]
 
     def transition_accuracy(self, trajs):
         correct_transitions, correct_first_transitions, total_transitions = 0, 0, 0
@@ -375,6 +375,8 @@ def main(cfg):
             settings=wandb.Settings(code_dir="."),
             config=cfg_dict,
         )
+
+    automata.save("toy")
 
     lm_datasets = {"train": train_dataset, "validation": eval_dataset}
     metrics = run_clm.run_trainer(
