@@ -26,8 +26,38 @@ pytest = "^7.2.0"
 pre-commit = "^2.20.0"
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core", "setuptools"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
 line-length = 120
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    # "I",  # isort
+    "C",  # flake8-comprehensions
+    "B",  # flake8-bugbear
+    "BLE", # flake8-blind-except
+    "D",  # pydocstyle
+]
+# using google docstring convention
+extend-ignore = [
+    "D203",
+    "D204",
+    "D213",
+    "D215",
+    "D400",
+    "D404",
+    "D406",
+    "D407",
+    "D408",
+    "D409",
+    "D413",
+]
+
+[tool.mypy]
+ignore_missing_imports = true
+exclude = [
+    "run_clm\\.py$",
+]

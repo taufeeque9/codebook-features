@@ -45,18 +45,7 @@ repos:
     args: ["--skip=*.pyc,tests/testdata/*,*.ipynb,*.csv","--ignore-words-list=codebook"]
 # Hooks that run in local environment (not isolated venv) as they need
 # same dependencies as our package.
-- repo: local
-  hooks:
-  # Run mypy directly from local repo rather than using mirror-mypy
-  # so that it uses installed dependencies. Adapted from:
-  # https://jaredkhan.com/blog/mypy-pre-commit
-  - id: mypy
-    name: mypy
-    language: system
-    types: [python]
-    entry: mypy --follow-imports=silent --show-error-codes
-    # use require_serial so that script
-    # is only called once per commit
-    require_serial: true
-    # Print the number of files as a sanity-check
-    verbose: true
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v0.812
+    hooks:
+    -   id: mypy
