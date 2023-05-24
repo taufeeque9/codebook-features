@@ -4,16 +4,17 @@ from typing import Optional, Tuple, Union
 import einops
 import torch
 import torch.nn.functional as F
-import transformer_lens
 from fancy_einsum import einsum
-from jaxtyping import Float
 from transformer_lens import components as tl_components
 from transformers.models.gpt2 import modeling_gpt2
 from transformers.models.gpt_neox import modeling_gpt_neox
 
 
 class PreResidualCodebookGPT2Block(modeling_gpt2.GPT2Block):
+    """GPT2Block with codebook applied to the main stream."""
+
     def __init__(self, config, layer_idx=None, codebook_layer=None):
+        """Initialize the transformer block."""
         assert not config.add_cross_attention, "Not implemented"
         super().__init__(config, layer_idx)
         self.codebook_layer = codebook_layer
@@ -33,6 +34,7 @@ class PreResidualCodebookGPT2Block(modeling_gpt2.GPT2Block):
         Tuple[torch.Tensor],
         Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]],
     ]:
+        """Forward pass of the transformer block."""
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
         attn_outputs = self.attn(
@@ -90,7 +92,10 @@ class PreResidualCodebookGPT2Block(modeling_gpt2.GPT2Block):
 
 
 class PreResidualCodebookGPTNeoXBlock(modeling_gpt_neox.GPTNeoXLayer):
+    """GPTNeoXBlock with codebook applied to the main stream."""
+
     def __init__(self, config, layer_idx=None, codebook_layer=None):
+        """Initialize the transformer block."""
         assert not config.add_cross_attention, "Not implemented"
         super().__init__(config)
         self.codebook_layer = codebook_layer
@@ -106,7 +111,7 @@ class PreResidualCodebookGPTNeoXBlock(modeling_gpt_neox.GPTNeoXLayer):
         layer_past=None,
         output_attentions=False,
     ):
-
+        """Forward pass of the transformer block."""
         attention_layer_outputs = self.attention(
             self.input_layernorm(hidden_states),
             attention_mask=attention_mask,
@@ -151,7 +156,10 @@ class PreResidualCodebookGPTNeoXBlock(modeling_gpt_neox.GPTNeoXLayer):
 
 
 class PreProjectionAttentionCodebookGPT2(modeling_gpt2.GPT2Attention):
+    """GPT2Attention with codebook applied before projecting to the residual stream."""
+
     def __init__(self, config, layer_idx=None, codebook_layer=None):
+        """Initialize the attention layer."""
         super().__init__(config, is_cross_attention=False)
         self.snap = True
         self.layer_idx = layer_idx
@@ -168,6 +176,7 @@ class PreProjectionAttentionCodebookGPT2(modeling_gpt2.GPT2Attention):
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
+        """Forward pass of the attention layer."""
         if encoder_hidden_states is not None:
             if not hasattr(self, "q_attn"):
                 raise ValueError(
@@ -222,7 +231,10 @@ class PreProjectionAttentionCodebookGPT2(modeling_gpt2.GPT2Attention):
 
 
 class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
+    """GPTNeoXAttention with codebook applied before projecting to the residual stream."""
+
     def __init__(self, config, layer_idx=None, codebook_layer=None):
+        """Initialize the attention layer."""
         super().__init__(config)
         self.codebook_layer = codebook_layer
         self.snap = True
@@ -238,6 +250,7 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
     ):
+        """Forward pass of the attention layer."""
         has_layer_past = layer_past is not None
 
         # Compute QKV
@@ -303,7 +316,10 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
 
 
 class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
+    """Hooked Transformer Attention layer with codebook applied before projecting to the residual stream."""
+
     def __init__(self, config, layer_idx=None, codebook_layer=None):
+        """Initialize the attention layer."""
         super().__init__(config, layer_id=layer_idx)
         self.codebook_layer = codebook_layer
         self.snap = True
@@ -311,27 +327,18 @@ class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
 
     def forward(
         self,
-        query_input: Union[
-            Float[torch.Tensor, "batch pos d_model"],
-            Float[torch.Tensor, "batch pos head_index d_model"],
-        ],
-        key_input: Union[
-            Float[torch.Tensor, "batch pos d_model"],
-            Float[torch.Tensor, "batch pos head_index d_model"],
-        ],
-        value_input: Union[
-            Float[torch.Tensor, "batch pos d_model"],
-            Float[torch.Tensor, "batch pos head_index d_model"],
-        ],
-        past_kv_cache_entry: Optional[
-            transformer_lens.past_key_value_caching.HookedTransformerKeyValueCacheEntry
-        ] = None,
-    ) -> Float[torch.Tensor, "batch pos d_model"]:
-        """
-        shortformer_pos_embed is only used if self.cfg.positional_embedding_type == "shortformer", else defaults to None and is irrelevant. See HookedTransformerConfig for more details
-        past_kv_cache_entry is an optional entry of past keys and values for this layer, only relevant if generating text. Defaults to None
-        """
+        query_input,
+        key_input,
+        value_input,
+        past_kv_cache_entry,
+    ):
+        """Forward pass of the attention layer.
 
+        shortformer_pos_embed is only used if self.cfg.positional_embedding_type == "shortformer", else defaults to None
+        and is irrelevant. See HookedTransformerConfig for more details
+        past_kv_cache_entry is an optional entry of past keys and values for this layer, only relevant if generating
+        text. Defaults to None.
+        """
         if self.cfg.use_split_qkv_input:
             qkv_einops_string = "batch pos head_index d_model"
         else:

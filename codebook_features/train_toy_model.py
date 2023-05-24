@@ -39,9 +39,7 @@ shortened_args = {
 
 @dataclass
 class ModelConfigArguments:
-    """
-    Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
-    """
+    """Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch."""
 
     model_type: str = field(default="gptneox")
     hidden_size: int = field(default=128)
@@ -54,7 +52,19 @@ class ModelConfigArguments:
 
 
 class ToyGraph:
-    def __init__(self, N=100, transition_matrix=None, seed=None, edges=10):
+    """Toy graph that constructs an automata with N states and fixed number of edges per state."""
+
+    def __init__(self, N: int = 100, transition_matrix=None, seed=None, edges=10):
+        """Initialize the automata.
+
+        Args:
+        ----
+            N: number of states in the automata.
+            transition_matrix: transition matrix of probabilities of shape (N, N) describing the automata.
+                If None, a random transition matrix is generated.
+            seed: random seed for generating the transition matrix.
+            edges: number of edges per state.
+        """
         self.rng = np.random.default_rng(seed=seed)
         self.edges = edges
         if transition_matrix is None:
@@ -77,37 +87,45 @@ class ToyGraph:
         self.digits = int(np.ceil(np.log10(N)))
 
     def step(self):
+        """Step the automata."""
         self.state = self.rng.choice(self.N, p=self.transition_matrix[self.state])
         return self.state
 
     def step_with(self, state):
+        """Step the automata from a given state."""
         return self.rng.choice(self.N, p=self.transition_matrix[state])
 
     def reset(self):
+        """Reset the automata to the initial state."""
         self.state = 0
         return self.state
 
     def set_seed(self, seed):
+        """Set the random seed."""
         self.rng = np.random.default_rng(seed=seed)
 
     def save(self, path):
+        """Save the automata to a given path."""
         path = pathlib.Path(path)
         path.mkdir(parents=True, exist_ok=True)
         np.save(path / "automata.npy", self.transition_matrix)
 
     @classmethod
     def load(cls, path):
+        """Load the automata from a given path."""
         transition_matrix = np.load(path)
         edges = (transition_matrix[0] != 0).sum()
         return cls(transition_matrix.shape[0], transition_matrix, edges=edges)
 
     def generate_trajectory(self, length):
+        """Generate a trajectory of a given length."""
         trajectory = [self.rng.choice(self.N)]
         for _ in range(length - 1):
             trajectory.append(self.step_with(trajectory[-1]))
         return trajectory
 
     def generate_trajectories(self, length, start_states=None):
+        """Generate trajectories of a given length from a given set of start states."""
         if start_states is None:
             curr_states = np.array(self.state * length)
         else:
@@ -120,6 +138,7 @@ class ToyGraph:
         return trajectories
 
     def verify_trajectory(self, traj):
+        """Verify that a given trajectory is valid."""
         for i in range(len(traj) - 1):
             if self.transition_matrix[traj[i], traj[i + 1]] == 0:
                 print("Fail index:", i)
@@ -128,12 +147,18 @@ class ToyGraph:
         return True
 
     def nbrs(self, state):
+        """Return the set of states that can be transitioned to from the given state."""
         return np.where(self.transition_matrix[state] != 0)[0]
 
     def nbrs_to(self, state):
+        """Return the set of states that can transition to the given state."""
         return np.where(self.transition_matrix[:, state] != 0)[0]
 
     def transition_accuracy(self, trajs):
+        """Compute the transition accuracy of a given set of trajectories.
+
+        Also computes the accuracy of the first transition across the trajectories.
+        """
         correct_transitions, correct_first_transitions, total_transitions = 0, 0, 0
         for traj in trajs:
             total_transitions += len(traj) - 1
@@ -151,6 +176,7 @@ class ToyGraph:
             return 0, 0
 
     def seq_to_traj(self, sequences):
+        """Convert a sequence of digits to a trajectory."""
         if type(sequences) == str:
             sequences = [sequences]
         trajs = []
@@ -163,11 +189,23 @@ class ToyGraph:
         return trajs
 
     def traj_to_str(self, traj):
+        """Convert a trajectory to a string of digits."""
         return "".join(["0" * (self.digits - len(str(x))) + str(x) for x in traj])
 
 
 class ToyDataset(IterableDataset):
+    """Dataset for generating trajectories from a given automata."""
+
     def __init__(self, graph, tokenizer, seq_len, max_samples=-1, save_tokens=False):
+        """Initialize the dataset.
+
+        Args:
+            graph: The automata to generate trajectories from.
+            tokenizer: The tokenizer to use.
+            seq_len: The length of the trajectories to generate.
+            max_samples: The maximum number of samples to generate.
+            save_tokens: Whether to save the tokens generated.
+        """
         self.graph = graph
         self.tokenizer = tokenizer
         self.seq_len = seq_len
@@ -177,6 +215,7 @@ class ToyDataset(IterableDataset):
         assert self.seq_len % self.graph.digits == 0
 
     def __iter__(self):
+        """Generate a tokenized trajectory."""
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is not None:
             self.graph.set_seed(worker_info.seed)
@@ -191,6 +230,7 @@ class ToyDataset(IterableDataset):
             yield token_dict
 
     def tokenize(self, traj):
+        """Convert a trajectory to a tokenized input."""
         inp_str = self.graph.traj_to_str(traj)
         inp_dict = {
             k: v.reshape(-1)
@@ -201,12 +241,26 @@ class ToyDataset(IterableDataset):
 
 
 class ToyModelTrainer(cb_trainer.CodebookTrainer):
+    """Trainer for the toy model."""
+
     def __init__(self, toy_graph, gen_seq_len, *args, **kwargs):
+        """Initialize the trainer.
+
+        Args:
+            toy_graph: The automata to generate trajectories from.
+            gen_seq_len: The length of the trajectories to generate.
+            args: Arguments to pass to the base trainer.
+            kwargs: Keyword arguments to pass to the base trainer.
+        """
         super().__init__(*args, **kwargs)
         self.toy_graph = toy_graph
         self.gen_seq_len = gen_seq_len
 
     def log(self, logs) -> None:
+        """Additional metrics to log for the toy model.
+
+        Logs the transition accuracy of the generated trajectories.
+        """
         if all("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
             gen_seq = self.model.generate(
@@ -224,6 +278,7 @@ class ToyModelTrainer(cb_trainer.CodebookTrainer):
 
 
 def create_tokenizer(path, vocab_size):
+    """Create a tokenizer for the toy model."""
     path = pathlib.Path(path)
     if not path.exists():
         path.mkdir()

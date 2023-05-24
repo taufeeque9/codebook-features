@@ -1,6 +1,6 @@
-import argparse
+"""Script to evaluate a model on a dataset."""
 
-import torch
+import argparse
 
 from codebook_features import evaluation, models, run_clm
 

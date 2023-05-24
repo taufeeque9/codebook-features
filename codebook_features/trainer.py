@@ -48,6 +48,7 @@ class CodebookTrainer(transformers.Trainer):
         )
 
     def compute_loss(self, model, inputs, return_outputs=False):
+        """Compute the loss for codebook models with regularization."""
         if return_outputs:
             loss, outputs = super().compute_loss(model, inputs, return_outputs)
         else:
@@ -141,7 +142,10 @@ class CodebookTrainer(transformers.Trainer):
 
 
 class WandbCallback(transformers.integrations.WandbCallback):
+    """WandbCallback with codebook model logging."""
+
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
+        """Adds codebook model related logging."""
         metric_prefix = ""
         for k in list(logs.keys()):
             if k.startswith("train_"):
@@ -154,35 +158,9 @@ class WandbCallback(transformers.integrations.WandbCallback):
             and model.logging
             and args.local_rank <= 0
         ):
-            for codebook_idx, codebooks in model.all_codebooks.items():
-                counts = codebooks[0].most_common_counts()
-                counts = np.stack([np.arange(counts.size), counts], axis=1)
-                counts = wandb.Table(
-                    data=counts,
-                    columns=["x", "count"],
-                )
-                logs[
-                    metric_prefix + f"code_counts/layer{codebook_idx}"
-                ] = wandb.plot_table(
-                    vega_spec_name="wandb/line/v0",
-                    data_table=counts,
-                    fields={"x": "x", "y": "count", "title": "Code Count Distribution"},
-                )
-                if metric_prefix == "eval_":
-                    continue
-                weight_table = wandb.Table(
-                    data=codebooks[0].get_most_used_code().reshape(-1, 1),
-                    columns=["weight"],
-                )
-                logs[
-                    metric_prefix + f"code_weights/layer{codebook_idx}"
-                ] = wandb.plot_table(
-                    vega_spec_name="interpretability/hist_small_bins",
-                    data_table=weight_table,
-                    fields={"value": "weight", "title": "Weight Distribution"},
-                )
-
-            model.reset_codebook_metrics()
+            logs = self.log_code_counts_and_weight_distribution(
+                logs, model, metric_prefix
+            )
 
         if args.local_rank <= 0:
             super().on_log(args, state, control, model, logs, **kwargs)
@@ -198,22 +176,59 @@ class WandbCallback(transformers.integrations.WandbCallback):
                     continue
                 logs.pop(metric_prefix + f"code_weights/layer{codebook_idx}")
 
+    def log_code_counts_and_weight_distribution(self, logs, model, metric_prefix):
+        """Logs the code activation plot and also the weight distribution of the most common codebook feature."""
+        for codebook_idx, codebooks in model.all_codebooks.items():
+            counts = codebooks[0].most_common_counts()
+            counts = np.stack([np.arange(counts.size), counts], axis=1)
+            counts = wandb.Table(
+                data=counts,
+                columns=["x", "count"],
+            )
+            logs[metric_prefix + f"code_counts/layer{codebook_idx}"] = wandb.plot_table(
+                vega_spec_name="wandb/line/v0",
+                data_table=counts,
+                fields={"x": "x", "y": "count", "title": "Code Count Distribution"},
+            )
+            if metric_prefix == "eval_":
+                continue
+            weight_table = wandb.Table(
+                data=codebooks[0].get_most_used_code().reshape(-1, 1),
+                columns=["weight"],
+            )
+            logs[
+                metric_prefix + f"code_weights/layer{codebook_idx}"
+            ] = wandb.plot_table(
+                vega_spec_name="interpretability/hist_small_bins",
+                data_table=weight_table,
+                fields={"value": "weight", "title": "Weight Distribution"},
+            )
+
+        model.reset_codebook_metrics()
+        return logs
+
 
 class MultiOptimizer(torch.optim.Optimizer):
+    """MultiOptimizer that wraps multiple optimizers."""
+
     def __init__(self, optimizers):
+        """Initializes the MultiOptimizer."""
         self.optimizers = optimizers
 
     def step(self, closure=None):
+        """Performs a single optimization step."""
         for optimizer in self.optimizers:
             optimizer.step(closure)
 
     def __setstate__(self, state):
+        """Sets the state of the all the optimizers."""
         super().__setstate__(state)
         for optimizer in self.optimizers:
             optimizer.__setstate__(state)
 
     @property
     def param_groups(self):
+        """Returns the parameter groups of all the optimizers."""
         param_grps = []
         for optimizer in self.optimizers:
             param_grps.extend(optimizer.param_groups)
@@ -221,13 +236,17 @@ class MultiOptimizer(torch.optim.Optimizer):
 
 
 class MulticodeKScheduler(transformers.TrainerCallback):
+    """K scheduler for multicode models."""
+
     def __init__(self, k_max, k_min, decay_steps, decay_power=1):
+        """Initializes the K scheduler."""
         self.k_max = k_max
         self.k_min = k_min
         self.decay_steps = decay_steps - 1
         self.decay_power = decay_power
 
     def k_scheduler(self, step):
+        """Returns the current K value."""
         return int(
             self.k_max
             - (self.k_max - self.k_min)
@@ -241,10 +260,13 @@ class MulticodeKScheduler(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs,
     ):
+        """Updates the K value."""
         models.BaseSnapFunction.k = self.k_scheduler(state.global_step)
 
     def on_train_begin(self, *args, **kwargs):
+        """Sets the K value to the max K."""
         models.BaseSnapFunction.k = self.k_max
 
     def on_train_end(self, *args, **kwargs):
+        """Sets the K value to the min K."""
         models.BaseSnapFunction.k = self.k_min

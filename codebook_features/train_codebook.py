@@ -32,20 +32,8 @@ shortened_args = {
 }
 
 
-@hydra.main(config_path="config", config_name="main")
-def main(cfg):
-    """Train codebook based models parametrized using hydra.
-
-    Args:
-        cfg: hydra config.
-
-    Returns: tuple of metrics for trained model and the baseline metrics.
-    """
-    training_args = run_clm.TrainingArguments(**cfg.training_args)
-    model_args = run_clm.ModelArguments(**cfg.model_args)
-    data_args = run_clm.DataTrainingArguments(**cfg.data_args)
-    training_args.local_rank = int(os.environ.get("LOCAL_RANK", -1))
-
+def prepare_logging(cfg, training_args):
+    """Prepare logging for wandb."""
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
     # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
     if torch.cuda.is_available():
@@ -68,49 +56,37 @@ def main(cfg):
     if tags:
         cfg_dict["training_args"]["run_name"] = training_args.run_name = ", ".join(tags)
 
-    if training_args.local_rank <= 0:
-        wandb.init(
-            project=cfg.project,
-            name=training_args.run_name,
-            tags=tags,
-            settings=wandb.Settings(code_dir="."),
-            config=cfg_dict,
-        )
+    return cfg_dict, tags
 
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path,
-        cache_dir=model_args.cache_dir,
-    )
+
+def get_baseline(training_args, model_args, data_args, model, baseline_output_dir):
+    """Get baseline metrics for the original model (no codebooks applied)."""
     baseline_output_dir = training_args.output_dir + "_baseline"
-    if cfg.get_baseline:
-        eval_args = dataclasses.replace(
-            training_args,
-            output_dir=baseline_output_dir,
-        )
-        trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
-            model_args,
-            data_args,
-            eval_args,
-            model,
-        )
-        model = torch.compile(model)
-        baseline_metrics = run_clm.run_trainer(
-            model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
-        )
-        baseline_metrics = {"baseline/" + k: v for k, v in baseline_metrics.items()}
-        with open(baseline_output_dir + "/metrics.json", "w") as f:
-            json.dump(baseline_metrics, f)
-        return baseline_metrics
-    codebook_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
-    model = models.wrap_codebook(
-        model_or_path=model,
-        config=codebook_config,
-        pretrained_path=cfg.pretrained_path,
+    eval_args = dataclasses.replace(
+        training_args,
+        output_dir=baseline_output_dir,
     )
+    trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
+        model_args,
+        data_args,
+        eval_args,
+        model,
+    )
+    model = torch.compile(model)
+    baseline_metrics = run_clm.run_trainer(
+        model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
+    )
+    baseline_metrics = {"baseline/" + k: v for k, v in baseline_metrics.items()}
+    with open(baseline_output_dir + "/metrics.json", "w") as f:
+        json.dump(baseline_metrics, f)
+    return baseline_metrics
 
-    if cfg.disable_logging:
-        model.disable_logging()
 
+def get_optimizer(training_args, model):
+    """Get optimizer for codebook based models.
+
+    Returns different optimizers based on whether the model params are being trained or not.
+    """
     if training_args.train_model_params:
         params = [
             {
@@ -137,6 +113,53 @@ def main(cfg):
     else:
         RuntimeWarning("Codebook not found in model. Training with model params.")
         optimizer = None
+    return optimizer
+
+
+@hydra.main(config_path="config", config_name="main")
+def main(cfg):
+    """Train codebook based models parametrized using hydra.
+
+    Args:
+        cfg: hydra config.
+
+    Returns: tuple of metrics for trained model and the baseline metrics.
+    """
+    training_args = run_clm.TrainingArguments(**cfg.training_args)
+    model_args = run_clm.ModelArguments(**cfg.model_args)
+    data_args = run_clm.DataTrainingArguments(**cfg.data_args)
+    training_args.local_rank = int(os.environ.get("LOCAL_RANK", -1))
+
+    cfg_dict, tags = prepare_logging(cfg, training_args)
+
+    if training_args.local_rank <= 0:
+        wandb.init(
+            project=cfg.project,
+            name=training_args.run_name,
+            tags=tags,
+            settings=wandb.Settings(code_dir="."),
+            config=cfg_dict,
+        )
+
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_args.model_name_or_path,
+        cache_dir=model_args.cache_dir,
+    )
+
+    if cfg.get_baseline:
+        return get_baseline(training_args, model_args, data_args, model)
+
+    codebook_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
+    model = models.wrap_codebook(
+        model_or_path=model,
+        config=codebook_config,
+        pretrained_path=cfg.pretrained_path,
+    )
+
+    if cfg.disable_logging:
+        model.disable_logging()
+
+    optimizer = get_optimizer(training_args, model)
 
     callbacks = [cb_trainer.WandbCallback()]
     if cfg.k_scheduler_kwargs is not None:
@@ -158,7 +181,9 @@ def main(cfg):
         model.init_codebook(trainer.get_train_dataloader())
 
     model.enable_codebooks()
-    model = torch.compile(model)
+    # compile not works on Windows currently
+    if os.name != "nt":
+        model = torch.compile(model)
     metrics = run_clm.run_trainer(
         model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
     )
