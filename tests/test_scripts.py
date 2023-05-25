@@ -20,7 +20,9 @@ class GradientCheckerOptimizer(torch.optim.AdamW):
         super().step(*args, **kwargs)
 
 
-@pytest.mark.parametrize("config_name", ["test", "test_pile", "test_pythia"])
+@pytest.mark.parametrize(
+    "config_name", ["test", "test_pile", "test_pythia", "test_vqtorch"]
+)
 def test_train_codebook(config_name):
     """Test training codebook script."""
     with hydra.initialize_config_module(

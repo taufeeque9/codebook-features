@@ -3,7 +3,7 @@
 import abc
 import os
 import re
-from typing import Any, Callable, Dict, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
 
 import numpy as np
 import torch
@@ -14,6 +14,7 @@ from sklearn import cluster as sklearn_cluster
 from torch import nn
 from tqdm import tqdm
 from transformer_lens.hook_points import HookPoint
+from vqtorch import nn as vqtorch_nn
 
 from codebook_features import mod_model_classes
 
@@ -367,15 +368,17 @@ class CodebookLayer(nn.Module):
             self.codebook = nn.Embedding(num_embeddings=num_codes, embedding_dim=dim)
         self.ln = torch.nn.LayerNorm(dim, eps=1e-05)
         self._num_codes = num_codes
-        self.counts = torch.zeros(num_codes, dtype=torch.long)
         self.soft_snap = soft_snap
         self.snap_fn = snap_fn
         self.hook_fn = hook_fn
         self.key = key
         self.kcodes = kcodes
-        self.reconstruction_mse = 0
-        self.input_norm = 0
-        self.output_norm = 0
+
+        # metrics
+        self.counts = torch.zeros(num_codes, dtype=torch.long)
+        self.reconstruction_mse = 0.0
+        self.input_norm = 0.0
+        self.output_norm = 0.0
         self.tokens_processed = 0
         self.reset_hook_kwargs()
         self.hook_codebook_ids = HookPoint()
@@ -452,7 +455,6 @@ class CodebookLayer(nn.Module):
                 codebook_ids[block_idx] = -1
 
             # update metrics
-            # self.counts.update(codebook_ids.cpu().numpy().flat)
             if self.logging:
                 with torch.no_grad():
                     #                    self.codes_triggered, counts = torch.unique(
@@ -463,7 +465,7 @@ class CodebookLayer(nn.Module):
                         codebook_ids.cpu(), sorted=False, return_counts=False
                     )
                     self.counts[self.codes_triggered] += 1
-                coeff = x.shape[0] * x.shape[1]
+                coeff: float = x.shape[0] * x.shape[1]
                 coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
                 mse = torch.mean(((x - output) ** 2).sum(dim=-1), dim=None)
                 self.reconstruction_mse += coeff * (
@@ -963,6 +965,363 @@ class GroupedCodebookLayer(nn.Module):
             codebook.partial_fit_codebook()
 
 
+class VQCodebookLayer(nn.Module):
+    """Codebook Layer that uses vqtorch's implementation of codebooks."""
+
+    def __init__(
+        self,
+        dim: int,
+        num_codes: int,
+        key: str,
+        soft_snap: bool = False,
+        snap_fn: Type[BaseSnapFunction] = EuclideanSnapFunction,
+        hook_fn: Optional[Callable] = None,
+        kmeans_init=False,
+        kmeans_kwargs: Optional[Dict] = None,
+        kcodes: int = 1,
+        beta: float = 0.95,
+        sync_nu: float = 0.0,
+        affine_lr: float = 0.0,
+        affine_groups: int = 1,
+        replace_freq: int = 0,
+        optimizer_kwargs: Optional[Dict] = None,
+        **kwargs,
+    ):
+        """Create the vqtorch codebook layer.
+
+        Args:
+        ----
+            dim: dimension size of the codebook features.
+            num_codes: number of codebook features to have.
+            key: key to identify the codebook in hook caches.
+            soft_snap: whether to snap the input using softmax. Defaults to False.
+            snap_fn: snap function to use.
+                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+            hook_fn: hook function apply to codebook ids.
+            kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
+            kmeans_kwargs: dictionary of arguments to pass to k-means embedding layer.
+            kcodes: number of codebook features to use for computing the output.
+            beta: commitment loss weighting
+            sync_nu: sync loss weighting
+            affine_lr: learning rate for affine transform
+            affine_groups: number of affine parameter groups
+            replace_freq: frequency to replace dead codes
+            optimizer_kwargs: arguments for the optimizer
+            kwargs: additional arguments for _VQBaseLayer
+
+        """
+        super().__init__()
+        self.dim = dim
+        self.num_codes = num_codes
+        self.key = key
+        self.soft_snap = soft_snap
+        if self.soft_snap:
+            raise NotImplementedError("Soft snap not implemented yet.")
+        self.snap_fn = snap_fn
+        self.hook_fn = hook_fn
+        self.kmeans_init = kmeans_init
+        self.kmeans_kwargs = kmeans_kwargs
+        self.kcodes = kcodes
+        if optimizer_kwargs is None:
+            optimizer_kwargs = {}
+
+        def inplace_optimizer(*_args, **_kwargs):
+            return torch.optim.SGD(*_args, **_kwargs, **optimizer_kwargs)
+
+        if "num_codebooks" in kwargs:
+            kwargs.pop("num_codebooks")
+        self.vq_layer = vqtorch_nn.VectorQuant(
+            feature_size=dim,
+            num_codes=num_codes,
+            beta=beta,
+            sync_nu=sync_nu,
+            affine_lr=affine_lr,
+            affine_groups=affine_groups,
+            replace_freq=replace_freq,
+            inplace_optimizer=inplace_optimizer,  # type: ignore
+            dim=-1,
+            **kwargs,
+        )
+
+        # metrics
+        self.counts = torch.zeros(num_codes, dtype=torch.long)
+        self.reconstruction_mse = 0.0
+        self.input_norm = 0.0
+        self.output_norm = 0.0
+        self.tokens_processed = 0
+        self.hook_codebook_ids = HookPoint()
+        self.logging = True
+
+    @property
+    def codebook(self) -> nn.Embedding:
+        """Return the codebook."""
+        return self.vq_layer.codebook
+
+    @property
+    def active_codes(self):
+        """Return the number of active codes."""
+        return torch.sum(self.counts != 0).item()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Snaps activations to elements in the codebook.
+
+        Args:
+        ----
+            x: input tensor of shape: (batch_size, seq_len, dim).
+
+        Returns: output with the feature vectors replaced using the codebook.
+        """
+        assert len(x.shape) == 3
+        output, return_dict = self.vq_layer(x)
+        codebook_ids = return_dict["q"]
+        if self.logging:
+            with torch.no_grad():
+                self.codes_triggered = torch.unique(
+                    codebook_ids.cpu(), sorted=False, return_counts=False
+                )
+                self.counts[self.codes_triggered] += 1
+            coeff: float = x.shape[0] * x.shape[1]
+            coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
+            mse = torch.mean(((x - output) ** 2).sum(dim=-1), dim=None)
+            self.reconstruction_mse += coeff * (mse.item() - self.reconstruction_mse)
+            self.input_norm += coeff * (
+                torch.norm(x, dim=-1).mean().item() - self.input_norm
+            )
+            self.output_norm += coeff * (
+                torch.norm(output, dim=-1).mean().item() - self.output_norm
+            )
+            self.tokens_processed += x.shape[0] * x.shape[1]
+
+        if self.hook_fn is not None:
+            self.hook_fn(self.key, codebook_ids.cpu().numpy())
+
+        return output
+
+    def enable_logging(self):
+        """Enable logging."""
+        self.logging = True
+
+    def disable_logging(self):
+        """Disable logging."""
+        self.logging = False
+
+    def get_most_used_code(self):
+        """Return the most used code."""
+        return self.vq_layer.get_codebook()[self.counts.argmax()].detach().cpu().numpy()
+
+    def set_hook_fn(self, hook_fn: Callable):
+        """Set the hook function.
+
+        Args:
+        ----
+            hook_fn: hook function to use.
+        """
+        self.hook_fn = hook_fn
+
+    def reset_metrics(self):
+        """Reset the counts of the codebook features."""
+        self.counts.zero_()
+        self.reconstruction_mse = 0
+        self.tokens_processed = 0
+        self.input_norm = 0
+        self.output_norm = 0
+
+    def avg_norm(self):
+        """Return the average norm of the codebook features."""
+        # TODO: check for affine transformations
+        return self.codebook.weight.norm(p=2, dim=1).mean().item()
+
+    def max_norm(self):
+        """Return the maximum norm of the codebook features."""
+        return self.codebook.weight.norm(p=2, dim=1).max().item()
+
+    def most_common_counts(self):
+        """Return the most common codebook feature counts."""
+        return self.counts.sort()[0].cpu().numpy()
+
+
+class CompositionalVQCodebookLayer(nn.Module):
+    """Codebook Layer that uses vqtorch's implementation of codebooks."""
+
+    def __init__(
+        self,
+        dim: int,
+        num_codes: int,
+        key: str,
+        num_codebooks: int = 1,
+        soft_snap: bool = False,
+        snap_fn: Type[BaseSnapFunction] = EuclideanSnapFunction,
+        hook_fn: Optional[Callable] = None,
+        kmeans_init=False,
+        kmeans_kwargs: Optional[Dict] = None,
+        kcodes: int = 1,
+        beta: float = 0.95,
+        sync_nu: float = 0.0,
+        affine_lr: float = 0.0,
+        affine_groups: int = 1,
+        replace_freq: int = 0,
+        optimizer_kwargs: Optional[Dict] = None,
+        share: bool = False,
+        **kwargs,
+    ):
+        """Create the vqtorch codebook layer.
+
+        Args:
+        ----
+            dim: dimension size of the codebook features.
+            num_codes: number of codebook features to have.
+            num_codebooks: number of codebooks to use. Defaults to 1.
+            key: key to identify the codebook in hook caches.
+            soft_snap: whether to snap the input using softmax. Defaults to False.
+            snap_fn: snap function to use.
+                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
+            hook_fn: hook function apply to codebook ids.
+            kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
+            kmeans_kwargs: dictionary of arguments to pass to k-means embedding layer.
+            kcodes: number of codebook features to use for computing the output.
+            beta: commitment loss weighting.
+            sync_nu: sync loss weighting.
+            affine_lr: learning rate for affine transform.
+            affine_groups: number of affine parameter groups.
+            replace_freq: frequency to replace dead codes.
+            optimizer_kwargs: arguments for the optimizer.
+            share: whether to share the codebooks across layers.
+            kwargs: additional arguments for _VQBaseLayer
+
+        """
+        super().__init__()
+        self.dim = dim
+        self.num_codes = num_codes
+        self.num_codebooks = num_codebooks
+        self.key = key
+        self.soft_snap = soft_snap
+        if self.soft_snap:
+            raise NotImplementedError("Soft snap not implemented yet.")
+        self.snap_fn = snap_fn
+        self.hook_fn = hook_fn
+        self.kmeans_init = kmeans_init
+        self.kmeans_kwargs = kmeans_kwargs
+        self.kcodes = kcodes
+        if optimizer_kwargs is None:
+            optimizer_kwargs = {}
+
+        def inplace_optimizer(*_args, **_kwargs):
+            return torch.optim.SGD(*_args, **_kwargs, **optimizer_kwargs)
+
+        if "num_codebooks" in kwargs:
+            kwargs.pop("num_codebooks")
+        self.vq_layer = vqtorch_nn.GroupVectorQuant(
+            feature_size=dim,
+            num_codes=num_codebooks*num_codes, # GVQ expects total number of codes across groups
+            groups=num_codebooks,
+            share=share,
+            beta=beta,
+            sync_nu=sync_nu,
+            affine_lr=affine_lr,
+            affine_groups=affine_groups,
+            replace_freq=replace_freq,
+            inplace_optimizer=inplace_optimizer,  # type: ignore
+            dim=-1,
+            **kwargs,
+        )
+
+        # metrics
+        self.counts = torch.zeros(num_codebooks*num_codes, dtype=torch.long)
+        self.reconstruction_mse = 0.0
+        self.input_norm = 0.0
+        self.output_norm = 0.0
+        self.tokens_processed = 0
+        self.hook_codebook_ids = HookPoint()
+        self.logging = True
+
+    @property
+    def codebook(self) -> nn.Embedding:
+        """Return the codebook."""
+        return self.vq_layer.codebook
+
+    @property
+    def active_codes(self):
+        """Return the number of active codes."""
+        return torch.sum(self.counts != 0).item()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Snaps activations to elements in the codebook.
+
+        Args:
+        ----
+            x: input tensor of shape: (batch_size, seq_len, dim).
+
+        Returns: output with the feature vectors replaced using the codebook.
+        """
+        assert len(x.shape) == 3
+        output, return_dict = self.vq_layer(x)
+        codebook_ids = return_dict["q"]
+        if self.logging:
+            with torch.no_grad():
+                self.codes_triggered = torch.unique(
+                    codebook_ids.cpu(), sorted=False, return_counts=False
+                )
+                self.counts[self.codes_triggered] += 1
+            coeff: float = x.shape[0] * x.shape[1]
+            coeff /= self.tokens_processed + x.shape[0] * x.shape[1]
+            mse = torch.mean(((x - output) ** 2).sum(dim=-1), dim=None)
+            self.reconstruction_mse += coeff * (mse.item() - self.reconstruction_mse)
+            self.input_norm += coeff * (
+                torch.norm(x, dim=-1).mean().item() - self.input_norm
+            )
+            self.output_norm += coeff * (
+                torch.norm(output, dim=-1).mean().item() - self.output_norm
+            )
+            self.tokens_processed += x.shape[0] * x.shape[1]
+
+        if self.hook_fn is not None:
+            self.hook_fn(self.key, codebook_ids.cpu().numpy())
+
+        return output
+
+    def enable_logging(self):
+        """Enable logging."""
+        self.logging = True
+
+    def disable_logging(self):
+        """Disable logging."""
+        self.logging = False
+
+    def get_most_used_code(self):
+        """Return the most used code."""
+        return self.vq_layer.get_codebook()[self.counts.argmax()].detach().cpu().numpy()
+
+    def set_hook_fn(self, hook_fn: Callable):
+        """Set the hook function.
+
+        Args:
+        ----
+            hook_fn: hook function to use.
+        """
+        self.hook_fn = hook_fn
+
+    def reset_metrics(self):
+        """Reset the counts of the codebook features."""
+        self.counts.zero_()
+        self.reconstruction_mse = 0
+        self.tokens_processed = 0
+        self.input_norm = 0
+        self.output_norm = 0
+
+    def avg_norm(self):
+        """Return the average norm of the codebook features."""
+        # TODO: check for affine transformations
+        return self.codebook.weight.norm(p=2, dim=1).mean().item()
+
+    def max_norm(self):
+        """Return the maximum norm of the codebook features."""
+        return self.codebook.weight.norm(p=2, dim=1).max().item()
+
+    def most_common_counts(self):
+        """Return the most common codebook feature counts."""
+        return self.counts.sort()[0].cpu().numpy()
+
+
 class CodebookWrapper(nn.Module, abc.ABC):
     """Abstract class to wraps a nn module by applying codebooks on the output of the layer."""
 
@@ -1183,6 +1542,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         kmeans_init_examples: int = 1000,
         kmeans_path: Optional[str] = None,
         kmeans_kwargs: Optional[Dict] = None,
+        codebook_kwargs: Optional[Dict] = None,
         **kwargs,
     ) -> None:
         """Create the config for the codebook model.
@@ -1190,7 +1550,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         Args:
         ----
             codebook_type: type of codebook to use. Can be either 'vanilla' (default, uses `CodebookLayer`),
-                'compositional' or 'grouped'.
+                'compositional', 'grouped', or 'vqtorch'.
             num_codes: number of codebook features to have.
             num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
@@ -1203,6 +1563,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             kmeans_init_examples: number of examples to use for kmeans initialization.
             kmeans_path: path to load or save the kmeans embeddings.
             kmeans_kwargs: additional keyword arguments to pass to kmeans.
+            codebook_kwargs: additional keyword arguments to pass to the codebook layer.
             kwargs: additional keyword arguments to pass to the config.
         """
         super().__init__(**kwargs)
@@ -1213,7 +1574,13 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         if type(k_codebook) == int:
             k_codebook = [k_codebook] * len(codebook_type)
         for i in range(len(codebook_type)):
-            if codebook_type[i] not in ["vanilla", "compositional", "grouped"]:
+            if codebook_type[i] not in [
+                "vanilla",
+                "compositional",
+                "grouped",
+                "vqtorch",
+                "comp-vqtorch",
+            ]:
                 raise ValueError(f"Invalid codebook type {codebook_type[i]}")
             if codebook_type[i] == "vanilla" and num_codebooks[i] != 1:  # type: ignore
                 raise ValueError("Vanilla codebook type can only have 1 codebook.")
@@ -1237,6 +1604,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         self.kmeans_path = kmeans_path
         self.kmeans_init_examples = kmeans_init_examples
         self.kmeans_kwargs = kmeans_kwargs
+        self.codebook_kwargs = codebook_kwargs
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):
@@ -1257,7 +1625,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             model: torch model to apply codebooks to.
         """
         super().__init__(config=config)
-        self.codebook_cls = []
+        self.codebook_cls: List = []
         self.model: Any = model
         self.logging = True
         self.model_params = list(model.parameters())
@@ -1294,6 +1662,10 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 self.codebook_cls.append(CompositionalCodebookLayer)
             elif cb_type == "grouped":
                 self.codebook_cls.append(GroupedCodebookLayer)
+            elif cb_type == "vqtorch":
+                self.codebook_cls.append(VQCodebookLayer)
+            elif cb_type == "comp-vqtorch":
+                self.codebook_cls.append(CompositionalVQCodebookLayer)
 
     def set_codebook_args(self):
         """Set the number of codebooks based on the `num_codebooks` configuration."""
@@ -1382,6 +1754,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
             kcodes=self.config.k_codebook[i_cb],
+            **self.config.codebook_kwargs,
         )
         self.codebook_params += list(
             layers[i].codebook_layer.codebook.parameters(),
@@ -1401,6 +1774,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
             kcodes=self.config.k_codebook[i_cb],
+            **self.config.codebook_kwargs,
         )
         layers[i].__setattr__(self.mlp_key, wrapped_mlp)
         self.codebook_params += list(
@@ -1422,6 +1796,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
             kcodes=self.config.k_codebook[i_cb],
+            **self.config.codebook_kwargs,
         )
         mlp.__setattr__(self.mlp_mid_key, wrapped_hidden_layer)
         self.codebook_params += list(
@@ -1444,6 +1819,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
             kcodes=self.config.k_codebook[i_cb],
+            **self.config.codebook_kwargs,
         )
         attn.__setattr__(self.qkv_key, wrapped_hidden_layer)
         self.codebook_params += list(
@@ -1464,6 +1840,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
             kcodes=self.config.k_codebook[i_cb],
+            **self.config.codebook_kwargs,
         )
         layers[i].__setattr__(self.attention_key, wrapped_attn)
         self.codebook_params += list(
@@ -1482,6 +1859,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
             kcodes=self.config.k_codebook[i_cb],
+            **self.config.codebook_kwargs,
         )
         new_block = self.pre_projection_attn_codebook_cls(
             self.base_model_cfg(),
@@ -1506,6 +1884,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kmeans_init=self.config.kmeans_init,
             kmeans_kwargs=self.config.kmeans_kwargs,
             kcodes=self.config.k_codebook[i_cb],
+            **self.config.codebook_kwargs,
         )
         pre_res_block = self.pre_residual_codebook_cls(
             self.base_model_cfg(),
@@ -2097,4 +2476,5 @@ def convert_state_dict(model, cfg: transformer_lens.HookedTransformerConfig):
     elif cfg.original_architecture == "neel":
         return model.state_dict()
     else:
+        raise ValueError(f"Unknown architecture {cfg.original_architecture}")
         raise ValueError(f"Unknown architecture {cfg.original_architecture}")
