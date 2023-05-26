@@ -14,7 +14,10 @@ training_args:
   logging_steps: 500
   evaluation_strategy: steps
   eval_steps: 500
-  save_steps: 10000
+  save_steps: 500
+  save_total_limit: 2
+  load_best_model_at_end: True
+  metric_for_best_model: transition_accuracy
   ddp_find_unused_parameters: False
   dataloader_num_workers: 8
 
@@ -38,6 +41,7 @@ codebook_args:
   # kmeans_kwargs:
   #   n_init: auto
   #   batch_size: 24576
+  codebook_kwargs: null
 
 k_scheduler_kwargs: null
 #   k_max: 10000
@@ -50,6 +54,7 @@ toy_dataset_args:
   max_eval_samples: 2048
 
 model_config_args:
+  model_path: null
   model_type: gptneox
   hidden_size: 128
   intermediate_size: 512

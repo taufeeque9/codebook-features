@@ -5,15 +5,22 @@ import json
 import os
 import pathlib
 from dataclasses import dataclass, field
+from typing import Optional
 
 import hydra
 import numpy as np
 import omegaconf
 import pandas as pd
 import torch
+import transformers
 from torch.utils.data import IterableDataset
-from transformers import (GPT2Config, GPT2LMHeadModel, GPT2TokenizerFast,
-                          GPTNeoXConfig, GPTNeoXForCausalLM)
+from transformers import (
+    GPT2Config,
+    GPT2LMHeadModel,
+    GPT2TokenizerFast,
+    GPTNeoXConfig,
+    GPTNeoXForCausalLM,
+)
 
 import wandb
 from codebook_features import models, run_clm
@@ -41,6 +48,12 @@ shortened_args = {
 class ModelConfigArguments:
     """Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch."""
 
+    model_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models"
+        },
+    )
     model_type: str = field(default="gptneox")
     hidden_size: int = field(default=128)
     intermediate_size: int = field(default=512)
@@ -304,6 +317,48 @@ def create_tokenizer(path, vocab_size):
     return tokenizer
 
 
+def load_model(config_args, cfg_dict):
+    """Loads the model based on the config."""
+    if config_args.model_path is not None:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            config_args.model_path
+        )
+    elif config_args.model_type == "gptneox":
+        config = GPTNeoXConfig(
+            vocab_size=config_args.vocab_size,
+            hidden_size=config_args.hidden_size,
+            num_hidden_layers=config_args.num_hidden_layers,
+            num_attention_heads=config_args.num_attention_heads,
+            intermediate_size=config_args.intermediate_size,
+            rotary_emb_base=config_args.rotary_emb_base,
+            bos_token_id=config_args.vocab_size - 1,
+            eos_token_id=config_args.vocab_size - 1,
+            max_position_embeddings=config_args.seq_len,
+        )
+        model = GPTNeoXForCausalLM(config=config)
+    elif config_args.model_type == "gpt2":
+        config = GPT2Config(
+            vocab_size=config_args.vocab_size,
+            n_embd=config_args.hidden_size,
+            n_layer=config_args.num_hidden_layers,
+            n_head=config_args.num_attention_heads,
+            n_inner=config_args.intermediate_size,
+            bos_token_id=config_args.vocab_size - 1,
+            eos_token_id=config_args.vocab_size - 1,
+            max_position_embeddings=config_args.seq_len,
+        )
+        model = GPT2LMHeadModel(config=config)
+    else:
+        raise ValueError(f"Unknown model type {config_args.model_type}")
+
+    if cfg_dict["apply_codebook"]:
+        cb_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
+        model = models.wrap_codebook(model_or_path=model, config=cb_config)
+        model.disable_logging()
+
+    return model
+
+
 @hydra.main(config_path="config", config_name="toy_main")
 def main(cfg):
     """Train codebook based models parametrized using hydra.
@@ -346,38 +401,8 @@ def main(cfg):
         seq_len=config_args.seq_len,
         max_samples=cfg.toy_dataset_args.max_eval_samples,
     )
-    if config_args.model_type == "gptneox":
-        config = GPTNeoXConfig(
-            vocab_size=config_args.vocab_size,
-            hidden_size=config_args.hidden_size,
-            num_hidden_layers=config_args.num_hidden_layers,
-            num_attention_heads=config_args.num_attention_heads,
-            intermediate_size=config_args.intermediate_size,
-            rotary_emb_base=config_args.rotary_emb_base,
-            bos_token_id=config_args.vocab_size - 1,
-            eos_token_id=config_args.vocab_size - 1,
-            max_position_embeddings=config_args.seq_len,
-        )
-        model = GPTNeoXForCausalLM(config=config)
-    elif config_args.model_type == "gpt2":
-        config = GPT2Config(
-            vocab_size=config_args.vocab_size,
-            n_embd=config_args.hidden_size,
-            n_layer=config_args.num_hidden_layers,
-            n_head=config_args.num_attention_heads,
-            n_inner=config_args.intermediate_size,
-            bos_token_id=config_args.vocab_size - 1,
-            eos_token_id=config_args.vocab_size - 1,
-            max_position_embeddings=config_args.seq_len,
-        )
-        model = GPT2LMHeadModel(config=config)
-    else:
-        raise ValueError(f"Unknown model type {config_args.model_type}")
 
-    if cfg.apply_codebook:
-        cb_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
-        model = models.wrap_codebook(model_or_path=model, config=cb_config)
-        model.disable_logging()
+    model = load_model(config_args, cfg_dict)
 
     optimizers = (None, None)
     if isinstance(model, models.CodebookModel):

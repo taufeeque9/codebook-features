@@ -1212,7 +1212,8 @@ class CompositionalVQCodebookLayer(nn.Module):
             kwargs.pop("num_codebooks")
         self.vq_layer = vqtorch_nn.GroupVectorQuant(
             feature_size=dim,
-            num_codes=num_codebooks*num_codes, # GVQ expects total number of codes across groups
+            num_codes=num_codebooks
+            * num_codes,  # GVQ expects total number of codes across groups
             groups=num_codebooks,
             share=share,
             beta=beta,
@@ -1226,7 +1227,7 @@ class CompositionalVQCodebookLayer(nn.Module):
         )
 
         # metrics
-        self.counts = torch.zeros(num_codebooks*num_codes, dtype=torch.long)
+        self.counts = torch.zeros(num_codebooks * num_codes, dtype=torch.long)
         self.reconstruction_mse = 0.0
         self.input_norm = 0.0
         self.output_norm = 0.0
@@ -1604,6 +1605,8 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         self.kmeans_path = kmeans_path
         self.kmeans_init_examples = kmeans_init_examples
         self.kmeans_kwargs = kmeans_kwargs
+        if codebook_kwargs is None:
+            codebook_kwargs = {}
         self.codebook_kwargs = codebook_kwargs
 
 
