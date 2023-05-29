@@ -44,8 +44,9 @@ k_scheduler_kwargs: null
 #   decay_steps: 5000
 
 toy_dataset_args:
-  num_states: 100
-  num_edges: 10
+  path: null
+  num_states: 4
+  num_edges: 1
   seed: 42
   max_eval_samples: 2
 
@@ -58,7 +59,7 @@ model_config_args:
   num_attention_heads: 1
   rotary_emb_base: 10
   seq_len: 32
-  vocab_size: 11
+  vocab_size: 3
 
 apply_codebook: True
 disable_logging: False

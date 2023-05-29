@@ -14,8 +14,13 @@ import pandas as pd
 import torch
 import transformers
 from torch.utils.data import IterableDataset
-from transformers import (GPT2Config, GPT2LMHeadModel, GPT2TokenizerFast,
-                          GPTNeoXConfig, GPTNeoXForCausalLM)
+from transformers import (
+    GPT2Config,
+    GPT2LMHeadModel,
+    GPT2TokenizerFast,
+    GPTNeoXConfig,
+    GPTNeoXForCausalLM,
+)
 
 import wandb
 from codebook_features import models, run_clm
@@ -62,16 +67,24 @@ class ModelConfigArguments:
 class ToyGraph:
     """Toy graph that constructs an automata with N states and fixed number of edges per state."""
 
-    def __init__(self, N: int = 100, transition_matrix=None, seed=None, edges=10):
+    def __init__(
+        self,
+        N: int = 100,
+        edges=10,
+        transition_matrix=None,
+        representation_base=10,
+        seed=None,
+    ):
         """Initialize the automata.
 
         Args:
         ----
             N: number of states in the automata.
+            edges: number of edges per state.
             transition_matrix: transition matrix of probabilities of shape (N, N) describing the automata.
                 If None, a random transition matrix is generated.
+            representation_base: base of the representation of the states.
             seed: random seed for generating the transition matrix.
-            edges: number of edges per state.
         """
         self.rng = np.random.default_rng(seed=seed)
         self.edges = edges
@@ -92,7 +105,8 @@ class ToyGraph:
         assert self.transition_matrix.shape == (N, N)
 
         self.state = 0
-        self.digits = int(np.ceil(np.log10(N)))
+        self.representation_base = representation_base
+        self.digits = int(np.ceil(np.emath.logn(n=representation_base, x=N)))
 
     def step(self):
         """Step the automata."""
@@ -119,11 +133,11 @@ class ToyGraph:
         np.save(path / "automata.npy", self.transition_matrix)
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path, **kwargs):
         """Load the automata from a given path."""
         transition_matrix = np.load(path)
         edges = (transition_matrix[0] != 0).sum()
-        return cls(transition_matrix.shape[0], transition_matrix, edges=edges)
+        return cls(transition_matrix.shape[0], transition_matrix, edges=edges, **kwargs)
 
     def generate_trajectory(self, length):
         """Generate a trajectory of a given length."""
@@ -193,12 +207,21 @@ class ToyGraph:
             trajs.append([])
             for i in range(0, len(seq), self.digits):
                 if len(seq[i : i + self.digits]) == self.digits:
-                    trajs[-1].append(int(seq[i : i + self.digits]))
+                    trajs[-1].append(
+                        int(seq[i : i + self.digits], base=self.representation_base)
+                    )
         return trajs
 
     def traj_to_str(self, traj):
         """Convert a trajectory to a string of digits."""
-        return "".join(["0" * (self.digits - len(str(x))) + str(x) for x in traj])
+        return "".join([self.token_repr(x) for x in traj])
+
+    def token_repr(self, state):
+        """Convert a state to a str of tokens."""
+        # convert decimal `state` to n-ary representation where n = self.representation_base
+        n_ary_repr = np.base_repr(state, base=self.representation_base)
+
+        return "0" * (self.digits - len(n_ary_repr)) + n_ary_repr
 
 
 class ToyDataset(IterableDataset):
@@ -272,7 +295,7 @@ class ToyModelTrainer(cb_trainer.CodebookTrainer):
         if all("eval_" in k for k in logs.keys()):
             metric_prefix = "eval_"
             gen_seq = self.model.generate(
-                num_return_sequences=10,
+                num_return_sequences=100,
                 max_length=self.gen_seq_len,
                 min_length=self.gen_seq_len,
                 do_sample=True,
@@ -382,11 +405,19 @@ def main(cfg):
     if tags:
         cfg_dict["training_args"]["run_name"] = training_args.run_name = ", ".join(tags)
 
-    automata = ToyGraph(
-        N=cfg.toy_dataset_args.num_states,
-        edges=cfg.toy_dataset_args.num_edges,
-        seed=cfg.toy_dataset_args.seed,
-    )
+    if cfg.toy_dataset_args.path is None:
+        automata = ToyGraph(
+            N=cfg.toy_dataset_args.num_states,
+            edges=cfg.toy_dataset_args.num_edges,
+            seed=cfg.toy_dataset_args.seed,
+            representation_base=config_args.vocab_size - 1,
+        )
+    else:
+        automata = ToyGraph.load(
+            cfg.toy_dataset_args.path,
+            seed=cfg.toy_dataset_args.seed,
+            representation_base=config_args.vocab_size - 1,
+        )
     tokenizer = create_tokenizer("toy/", config_args.vocab_size)
     train_dataset = ToyDataset(
         automata, tokenizer=tokenizer, seq_len=config_args.seq_len

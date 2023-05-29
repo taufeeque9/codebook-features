@@ -50,6 +50,7 @@ k_scheduler_kwargs: null
 #   decay_steps: 5000
 
 toy_dataset_args:
+  path: null
   num_states: 100
   num_edges: 10
   seed: 42
