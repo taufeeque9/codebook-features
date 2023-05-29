@@ -1,6 +1,5 @@
 model_args:
   model_name_or_path: taufeeque/tiny-gpt2
-  cache_dir: /data/.cache
 
 data_args:
   dataset_name: wikitext
@@ -14,8 +13,8 @@ training_args:
   overwrite_output_dir: True
   do_train: True
   do_eval: True
-  max_steps: 2
-  save_steps: 1
+  max_steps: 3
+  save_steps: 10
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
   evaluation_strategy: steps
@@ -45,6 +44,8 @@ codebook_args:
     n_init: 1
     batch_size: 1024
     verbose: 1
+  codebook_kwargs: null
+  replace_codes: True
 
 k_scheduler_kwargs: null
   # k_max: 100

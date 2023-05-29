@@ -45,6 +45,8 @@ codebook_args:
   kmeans_kwargs:
     n_init: auto
     batch_size: 24576
+  codebook_kwargs: null
+  replace_codes: False
 
 k_scheduler_kwargs: null
 #   k_max: 10000

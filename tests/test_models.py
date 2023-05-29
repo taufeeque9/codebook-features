@@ -26,6 +26,17 @@ def hooked_model(request):
     return hooked_model
 
 
+def test_code_replacement():
+    """Test code replacement."""
+    layer = models.CodebookLayer(dim=100, num_codes=10, key="testlayer")
+    layer.counts = torch.tensor([1, 0, 3, 0, 2, 0, 0, 0, 0, 0])
+    orig_weight = layer.codebook.weight.clone()
+    layer.replace_codes()
+    new_weight = layer.codebook.weight
+    unreplaced_codes = torch.where(layer.counts > 0)[0]
+    assert torch.allclose(new_weight[unreplaced_codes], orig_weight[unreplaced_codes])
+
+
 def test_codebook_layer():
     """Test CodebookLayer."""
     layer = models.CodebookLayer(dim=100, num_codes=3, key="testlayer")

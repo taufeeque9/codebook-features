@@ -14,13 +14,8 @@ import pandas as pd
 import torch
 import transformers
 from torch.utils.data import IterableDataset
-from transformers import (
-    GPT2Config,
-    GPT2LMHeadModel,
-    GPT2TokenizerFast,
-    GPTNeoXConfig,
-    GPTNeoXForCausalLM,
-)
+from transformers import (GPT2Config, GPT2LMHeadModel, GPT2TokenizerFast,
+                          GPTNeoXConfig, GPTNeoXForCausalLM)
 
 import wandb
 from codebook_features import models, run_clm
@@ -354,7 +349,8 @@ def load_model(config_args, cfg_dict):
     if cfg_dict["apply_codebook"]:
         cb_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
         model = models.wrap_codebook(model_or_path=model, config=cb_config)
-        model.disable_logging()
+        if not cb_config.replace_codes:
+            model.disable_logging()
 
     return model
 

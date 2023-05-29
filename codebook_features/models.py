@@ -338,7 +338,8 @@ class CodebookLayer(nn.Module):
         hook_fn: Optional[Callable] = None,
         kmeans_init=False,
         kmeans_kwargs: Optional[Dict] = None,
-        kcodes=1,
+        kcodes: int = 1,
+        replace_after_steps: int = 0,
         **kwargs,
     ):
         """Create the codebook layer.
@@ -355,6 +356,7 @@ class CodebookLayer(nn.Module):
             kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
             kmeans_kwargs: dictionary of arguments to pass to k-means embedding layer.
             kcodes: number of codebook features to use for computing the output.
+            replace_after_steps: number of steps after which to replace a dead code.
             kwargs: additional arguments.
         """
         super().__init__()
@@ -383,6 +385,8 @@ class CodebookLayer(nn.Module):
         self.reset_hook_kwargs()
         self.hook_codebook_ids = HookPoint()
         self.logging = True
+        self.replace_after_steps = replace_after_steps
+        self.steps_since_replacement = 0
 
     @property
     def active_codes(self):
@@ -543,30 +547,21 @@ class CodebookLayer(nn.Module):
         """Return the maximum norm of the codebook features."""
         return self.codebook.weight.norm(p=2, dim=1).max().item()
 
-    # TODO: Consider using a fraction for the threshold instead of an absolute number
-    def expire_codes(self, threshold: int = 1):
-        """re-initialize the codebook features with activation count below threshold.
-
-        Args:
-        ----
-            threshold: minimum count for feature vector to not get replaced. Defaults to 1.
-        """
-        underused_codes = set()
-        for i in range(self.codebook.weight.size(0)):
-            if self.counts[i] < threshold:
-                underused_codes.add(i)
+    def replace_codes(self):
+        """re-initialize the dead codebook features and returns number of replaced codes."""
+        underused_codes = torch.where(self.counts == 0)[0].to(
+            self.codebook.weight.device
+        )
         with torch.no_grad():
             weights = torch.rand((len(underused_codes), self.codebook.weight.size(0)))
             weights = weights / weights.sum(1, keepdim=True)
             weights = weights.to(self.codebook.weight.device)
             new_codes = torch.einsum("uc,cd->ud", weights, self.codebook.weight)
-            underused_codes = torch.tensor(list(underused_codes)).to(
-                self.codebook.weight.device,
-            )
             try:
                 self.codebook.weight[underused_codes] = new_codes
             except IndexError:
                 pass
+        return len(underused_codes)
 
     def most_common_counts(self):
         """Return the most common codebook feature counts."""
@@ -668,6 +663,11 @@ class CompositionalCodebookLayer(nn.Module):
         """Disable logging for all the codebooks."""
         for codebook in self.codebook:
             codebook.disable_logging()
+
+    def replace_codes(self):
+        """Replace the dead codebook features."""
+        for codebook in self.codebook:
+            codebook.replace_codes()
 
     @property
     def active_codes(self):
@@ -1544,6 +1544,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         kmeans_path: Optional[str] = None,
         kmeans_kwargs: Optional[Dict] = None,
         codebook_kwargs: Optional[Dict] = None,
+        replace_codes: bool = False,
         **kwargs,
     ) -> None:
         """Create the config for the codebook model.
@@ -1565,6 +1566,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             kmeans_path: path to load or save the kmeans embeddings.
             kmeans_kwargs: additional keyword arguments to pass to kmeans.
             codebook_kwargs: additional keyword arguments to pass to the codebook layer.
+            replace_codes: whether to replace the dead codes in the codebooks.
             kwargs: additional keyword arguments to pass to the config.
         """
         super().__init__(**kwargs)
@@ -1608,6 +1610,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         if codebook_kwargs is None:
             codebook_kwargs = {}
         self.codebook_kwargs = codebook_kwargs
+        self.replace_codes = replace_codes
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):
@@ -2053,6 +2056,12 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             for codebook in codebooks:
                 codebook.disable_logging()
 
+    def replace_codes(self):
+        """Replaces the dead codebook features."""
+        for codebooks in self.all_codebooks.values():
+            for codebook in codebooks:
+                codebook.replace_codes()
+
     @property
     @abc.abstractmethod
     def pre_projection_attn_codebook_cls(self) -> Any:
@@ -2479,5 +2488,4 @@ def convert_state_dict(model, cfg: transformer_lens.HookedTransformerConfig):
     elif cfg.original_architecture == "neel":
         return model.state_dict()
     else:
-        raise ValueError(f"Unknown architecture {cfg.original_architecture}")
         raise ValueError(f"Unknown architecture {cfg.original_architecture}")

@@ -36,6 +36,8 @@ codebook_args:
   # kmeans_kwargs:
   #   n_init: auto
   #   batch_size: 24576
+  codebook_kwargs: null
+  replace_codes: False
 
 k_scheduler_kwargs: null
 #   k_max: 10000
@@ -48,6 +50,7 @@ toy_dataset_args:
   max_eval_samples: 2
 
 model_config_args:
+  model_path: null
   model_type: gptneox
   hidden_size: 16
   intermediate_size: 64

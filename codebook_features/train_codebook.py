@@ -157,6 +157,8 @@ def main(cfg):
     )
 
     if cfg.disable_logging:
+        if codebook_config.replace_codes:
+            raise ValueError("Cannot disable logging with code replacement.")
         model.disable_logging()
 
     optimizer = get_optimizer(training_args, model)
