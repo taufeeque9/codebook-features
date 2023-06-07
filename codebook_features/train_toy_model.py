@@ -137,7 +137,12 @@ class ToyGraph:
         """Load the automata from a given path."""
         transition_matrix = np.load(path)
         edges = (transition_matrix[0] != 0).sum()
-        return cls(transition_matrix.shape[0], transition_matrix, edges=edges, **kwargs)
+        return cls(
+            N=transition_matrix.shape[0],
+            transition_matrix=transition_matrix,
+            edges=edges,
+            **kwargs,
+        )
 
     def generate_trajectory(self, length):
         """Generate a trajectory of a given length."""
@@ -267,6 +272,13 @@ class ToyDataset(IterableDataset):
             k: v.reshape(-1)
             for k, v in self.tokenizer(inp_str, return_tensors="pt").items()
         }
+        inp_dict["input_ids"] = torch.nn.functional.pad(
+            inp_dict["input_ids"],
+            (1, 0),
+            mode="constant",
+            value=self.tokenizer.bos_token_id,
+        )
+        inp_dict["input_ids"] = inp_dict["input_ids"][: self.seq_len]
         inp_dict["labels"] = inp_dict["input_ids"].clone()
         return inp_dict
 
