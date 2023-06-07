@@ -666,8 +666,10 @@ class CompositionalCodebookLayer(nn.Module):
 
     def replace_codes(self):
         """Replace the dead codebook features."""
+        avg_replaced_codes = 0
         for codebook in self.codebook:
-            codebook.replace_codes()
+            avg_replaced_codes += codebook.replace_codes()
+        return avg_replaced_codes / len(self.codebook)
 
     @property
     def active_codes(self):
@@ -2058,9 +2060,15 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     def replace_codes(self):
         """Replaces the dead codebook features."""
+        total_replaced_codes = 0
         for codebooks in self.all_codebooks.values():
+            avg_replaced_codes = 0
             for codebook in codebooks:
-                codebook.replace_codes()
+                avg_replaced_codes += codebook.replace_codes()
+            avg_replaced_codes /= len(codebooks)
+            total_replaced_codes += avg_replaced_codes
+        total_replaced_codes /= len(self.all_codebooks)
+        return total_replaced_codes
 
     @property
     @abc.abstractmethod
