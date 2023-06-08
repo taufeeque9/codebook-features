@@ -197,7 +197,9 @@ class InnerProductSnapFunction(BaseSnapFunction):
 
         Returns: tuple of output of snap function and the IDs of closest codebook features.
         """
-        logits = torch.matmul(inputs, codebook.T)
+        # normalize codebook
+        cb_norm = torch.linalg.vector_norm(codebook, dim=-1).reshape(1, 1, -1)
+        logits = torch.matmul(inputs, codebook.T) / cb_norm
         if hook_kwargs["cosine"]:
             logits = logits / (
                 torch.norm(inputs, dim=-1, keepdim=True)
@@ -340,6 +342,7 @@ class CodebookLayer(nn.Module):
         kmeans_kwargs: Optional[Dict] = None,
         kcodes: int = 1,
         replace_after_steps: int = 0,
+        replace_rho: float = 0.0,
         **kwargs,
     ):
         """Create the codebook layer.
@@ -357,6 +360,7 @@ class CodebookLayer(nn.Module):
             kmeans_kwargs: dictionary of arguments to pass to k-means embedding layer.
             kcodes: number of codebook features to use for computing the output.
             replace_after_steps: number of steps after which to replace a dead code.
+            replace_rho: magnitude of random noise to add to a replaced code.
             kwargs: additional arguments.
         """
         super().__init__()
@@ -386,6 +390,7 @@ class CodebookLayer(nn.Module):
         self.hook_codebook_ids = HookPoint()
         self.logging = True
         self.replace_after_steps = replace_after_steps
+        self.replace_rho = replace_rho
         self.steps_since_replacement = 0
 
     @property
@@ -441,8 +446,9 @@ class CodebookLayer(nn.Module):
         assert len(x.shape) == 3  # (batch_size, seq_len, dim)
         if not self.soft_snap:
             # Hard choice of a single codebook vector
+            normalized_input = self.ln(x)
             output, codebook_ids = self.snap_fn.apply(
-                self.ln(x),
+                normalized_input,
                 self.codebook.weight,
                 self.kcodes,
                 self.hook_kwargs,
@@ -482,6 +488,12 @@ class CodebookLayer(nn.Module):
                     torch.norm(output, dim=-1).mean().item() - self.output_norm
                 )
                 self.tokens_processed += x.shape[0] * x.shape[1]
+
+                if self.replace_after_steps > 0:
+                    if self.steps_since_replacement >= self.replace_after_steps:
+                        self.steps_since_replacement = 0
+                        self.replace_dead_codes(normalized_input)
+                    self.steps_since_replacement += 1
 
             if self.hook_fn is not None:
                 self.hook_fn(self.key, codebook_ids.cpu().numpy())
@@ -547,20 +559,27 @@ class CodebookLayer(nn.Module):
         """Return the maximum norm of the codebook features."""
         return self.codebook.weight.norm(p=2, dim=1).max().item()
 
-    def replace_codes(self):
+    def replace_dead_codes(self, x: torch.Tensor):
         """re-initialize the dead codebook features and returns number of replaced codes."""
         underused_codes = torch.where(self.counts == 0)[0].to(
             self.codebook.weight.device
         )
+        num_inactive = len(underused_codes)
         with torch.no_grad():
-            weights = torch.rand((len(underused_codes), self.codebook.weight.size(0)))
-            weights = weights / weights.sum(1, keepdim=True)
-            weights = weights.to(self.codebook.weight.device)
-            new_codes = torch.einsum("uc,cd->ud", weights, self.codebook.weight)
-            try:
-                self.codebook.weight[underused_codes] = new_codes
-            except IndexError:
-                pass
+            x = x.flatten(0, -2)  # flatten to 2D
+            x = x[torch.randperm(x.size(0))]  # shuffle
+            mult = num_inactive // x.size(0) + 1
+            if mult > 1:  # if theres not enough
+                x = torch.cat(mult * [x])
+            new_codes = x[:num_inactive]
+
+            if self.replace_rho > 0:
+                norm = new_codes.norm(p=2, dim=-1, keepdim=True)
+                noise = torch.randn_like(new_codes)
+                new_codes = new_codes + self.rho * norm * noise
+
+            self.codebook.weight.data[underused_codes] = new_codes
+            self.counts.zero_()
         return len(underused_codes)
 
     def most_common_counts(self):
@@ -602,6 +621,8 @@ class CompositionalCodebookLayer(nn.Module):
         snap_fn: Type[BaseSnapFunction] = EuclideanSnapFunction,
         hook_fn: Optional[Callable] = None,
         kmeans_kwargs: Optional[Dict] = None,
+        replace_after_steps: int = 0,
+        replace_rho: float = 0.0,
         kcodes: int = 1,
     ):
         """Create the compositional codebook layer.
@@ -618,6 +639,8 @@ class CompositionalCodebookLayer(nn.Module):
             hook_fn: hook function apply to codebook ids.
             kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
             kmeans_kwargs: dictionary of arguments to pass to k-means embedding layer.
+            replace_after_steps: number of steps after which to replace dead codes. Defaults to 0.
+            replace_rho: magnitude of noise to add to new codes. Defaults to 0.0.
             kcodes: number of codebook features to use for computing the output.
         """
         super().__init__()
@@ -642,6 +665,8 @@ class CompositionalCodebookLayer(nn.Module):
                     snap_fn=snap_fn,
                     hook_fn=hook_fn,
                     kmeans_kwargs={**kmeans_kwargs, "random_state": seed + i},
+                    replace_after_steps=replace_after_steps,
+                    replace_rho=replace_rho,
                     kcodes=kcodes,
                 )
                 for i in range(num_codebooks)
@@ -1546,7 +1571,6 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         kmeans_path: Optional[str] = None,
         kmeans_kwargs: Optional[Dict] = None,
         codebook_kwargs: Optional[Dict] = None,
-        replace_codes: bool = False,
         **kwargs,
     ) -> None:
         """Create the config for the codebook model.
@@ -1568,7 +1592,6 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             kmeans_path: path to load or save the kmeans embeddings.
             kmeans_kwargs: additional keyword arguments to pass to kmeans.
             codebook_kwargs: additional keyword arguments to pass to the codebook layer.
-            replace_codes: whether to replace the dead codes in the codebooks.
             kwargs: additional keyword arguments to pass to the config.
         """
         super().__init__(**kwargs)
@@ -1612,7 +1635,6 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         if codebook_kwargs is None:
             codebook_kwargs = {}
         self.codebook_kwargs = codebook_kwargs
-        self.replace_codes = replace_codes
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):

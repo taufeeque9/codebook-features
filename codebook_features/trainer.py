@@ -204,10 +204,6 @@ class WandbCallback(transformers.integrations.WandbCallback):
                 fields={"value": "weight", "title": "Weight Distribution"},
             )
 
-        if model.config.replace_codes and metric_prefix == "eval_":
-            codes_replaced = model.replace_codes()
-            logs[metric_prefix + "codes_replaced"] = codes_replaced
-
         model.reset_codebook_metrics()
         return logs
 
