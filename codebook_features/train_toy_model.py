@@ -14,13 +14,8 @@ import pandas as pd
 import torch
 import transformers
 from torch.utils.data import IterableDataset
-from transformers import (
-    GPT2Config,
-    GPT2LMHeadModel,
-    GPT2TokenizerFast,
-    GPTNeoXConfig,
-    GPTNeoXForCausalLM,
-)
+from transformers import (GPT2Config, GPT2LMHeadModel, GPT2TokenizerFast,
+                          GPTNeoXConfig, GPTNeoXForCausalLM)
 
 import wandb
 from codebook_features import models, run_clm
@@ -144,6 +139,18 @@ class ToyGraph:
             **kwargs,
         )
 
+    def reverse(self):
+        """Reverse the automata by creating a new copy."""
+        mtx = self.transition_matrix.T.copy()
+        mtx[mtx != 0] = 1
+        mtx = mtx / mtx.sum(axis=1, keepdims=True)
+        return ToyGraph(
+            N=self.N,
+            transition_matrix=mtx,
+            edges=None,  # num of edges are not fixed in the reversed automata
+            representation_base=self.representation_base,
+        )
+
     def generate_trajectory(self, length):
         """Generate a trajectory of a given length."""
         trajectory = [self.rng.choice(self.N)]
@@ -157,7 +164,7 @@ class ToyGraph:
             curr_states = np.array(self.state * length)
         else:
             curr_states = copy.deepcopy(start_states)
-        trajectories = np.zeros((len(start_states), length))
+        trajectories = np.zeros((len(start_states), length), dtype=np.int32)
         for i in range(length):
             for j in range(len(start_states)):
                 curr_states[j] = self.step_with(curr_states[j])

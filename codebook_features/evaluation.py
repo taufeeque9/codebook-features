@@ -7,11 +7,13 @@ import numpy as np
 from codebook_features import models, run_clm
 
 
-def evaluate(model, model_args, data_args, eval_on="train", save_dir=None):
+def evaluate(
+    model, model_args, data_args, eval_on="train", save_dir=None, dir_prefix="output"
+):
     """Evaluate a model on a dataset."""
     output_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     if save_dir is not None:
-        output_dir = f"{save_dir}/{output_dir}"
+        output_dir = f"{save_dir}/{dir_prefix}_{output_dir}"
 
     eval_args = run_clm.TrainingArguments(
         output_dir=output_dir,
@@ -37,7 +39,10 @@ def evaluate(model, model_args, data_args, eval_on="train", save_dir=None):
         training_args=eval_args,
         model=model,
     )
-    dataset = trainer.train_dataset if eval_on == "train" else trainer.eval_dataset
+    if isinstance(eval_on, str):
+        dataset = trainer.train_dataset if eval_on == "train" else trainer.eval_dataset
+    else:
+        dataset = eval_on
     tokens = dataset["input_ids"]
     print("tokens shape:", len(tokens))
     if isinstance(model, models.HookedTransformerCodebookModel):

@@ -532,6 +532,19 @@ class CodebookLayer(nn.Module):
             for k in self.hook_kwargs
         )
 
+    def disable_codes(self, codes: Union[Sequence[int], int]):
+        """Disable the given codes.
+
+        Args:
+        ----
+            codes: list of codes to disable.
+        """
+        if isinstance(codes, int):
+            codes = [codes]
+        self.hook_kwargs["disable_codes"] += codes
+        # ensure codes are unique
+        self.hook_kwargs["disable_codes"] = list(set(self.hook_kwargs["disable_codes"]))
+
     def reset_hook_kwargs(self):
         """Reset the hook kwargs."""
         self.hook_kwargs = {
@@ -569,7 +582,7 @@ class CodebookLayer(nn.Module):
             x = x.flatten(0, -2)  # flatten to 2D
             x = x[torch.randperm(x.size(0))]  # shuffle
             mult = num_inactive // x.size(0) + 1
-            if mult > 1:  # if theres not enough
+            if mult > 1:  # if there's not enough
                 x = torch.cat(mult * [x])
             new_codes = x[:num_inactive]
 
@@ -775,6 +788,23 @@ class CompositionalCodebookLayer(nn.Module):
             return
         for codebook in self.codebook:
             codebook.set_hook_kwargs(**kwargs)
+
+    def disable_codes(self, codes: Union[Sequence[int], int], head_idx=None):
+        """Disable the given codes.
+
+        Args:
+        ----
+            codes: a code or a list of codes to disable.
+            head_idx: index of the head to disable the codes for.
+        """
+        if head_idx is not None:
+            if type(head_idx) == int:
+                head_idx = [head_idx]
+            for i in head_idx:
+                self.codebook[i].disable_codes(codes)
+            return
+        for codebook in self.codebook:
+            codebook.disable_codes(codes)
 
     def reset_hook_kwargs(self):
         """Reset the hook kwargs for the codebooks."""
@@ -1971,6 +2001,23 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         for _i, layers in self.all_codebooks.items():
             for layer in layers:
                 layer.set_hook_kwargs(**kwargs)
+
+    def disable_codes(self, codes: Union[Sequence[int], int], idx=None):
+        """Disables the codes in the codebook layers in `idx`.
+
+        If `idx` is None, disables the codes in all codebook layers.
+        """
+        if idx is not None:
+            if type(idx) == int:
+                idx = [idx]
+            for i in idx:
+                layers = self.all_codebooks[i]
+                for layer in layers:
+                    layer.disable_codes(codes)
+            return
+        for _i, layers in self.all_codebooks.items():
+            for layer in layers:
+                layer.disable_codes(codes)
 
     def reset_hook_kwargs(self, idx=None):
         """Resets the hook kwargs for the codebook layers in `idx`."""
