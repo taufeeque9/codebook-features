@@ -21,7 +21,8 @@ class GradientCheckerOptimizer(torch.optim.AdamW):
 
 
 @pytest.mark.parametrize(
-    "config_name", ["test", "test_pile", "test_pythia", "test_vqtorch"]
+    "config_name",
+    ["test", "test_tinystories", "test_pile", "test_pythia", "test_vqtorch"],
 )
 def test_train_codebook(config_name):
     """Test training codebook script."""

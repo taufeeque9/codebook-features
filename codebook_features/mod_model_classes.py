@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from fancy_einsum import einsum
 from transformer_lens import components as tl_components
 from transformers.models.gpt2 import modeling_gpt2
+from transformers.models.gpt_neo import modeling_gpt_neo
 from transformers.models.gpt_neox import modeling_gpt_neox
 
 
@@ -313,6 +314,64 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
             outputs += (attn_weights,)
 
         return outputs
+
+
+class PreProjectionAttentionCodebookGPTNeo(modeling_gpt_neo.GPTNeoSelfAttention):
+    """GPTNeoXAttention with codebook applied before projecting to the residual stream."""
+
+    def __init__(self, config, attention_type, layer_idx=None, codebook_layer=None):
+        """Initialize the attention layer."""
+        super().__init__(config, attention_type)
+        self.codebook_layer = codebook_layer
+        self.snap = True
+        self.layer_idx = layer_idx
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        layer_past=None,
+        head_mask=None,
+        use_cache=False,
+        output_attentions=False,
+    ):
+        """Forward pass of the attention layer."""
+        query = self.q_proj(hidden_states)
+        key = self.k_proj(hidden_states)
+        value = self.v_proj(hidden_states)
+
+        query = self._split_heads(query, self.num_heads, self.head_dim)
+        key = self._split_heads(key, self.num_heads, self.head_dim)
+        value = self._split_heads(value, self.num_heads, self.head_dim)
+
+        if layer_past is not None:
+            past_key = layer_past[0]
+            past_value = layer_past[1]
+            key = torch.cat((past_key, key), dim=-2)
+            value = torch.cat((past_value, value), dim=-2)
+
+        if use_cache is True:
+            present = (key, value)
+        else:
+            present = None
+
+        attn_output, attn_weights = self._attn(
+            query, key, value, attention_mask, head_mask
+        )
+
+        attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
+
+        if self.codebook_layer is not None and self.snap:
+            attn_output = self.codebook_layer(attn_output)
+
+        attn_output = self.out_proj(attn_output)
+        attn_output = self.resid_dropout(attn_output)
+
+        outputs = (attn_output, present)
+        if output_attentions:
+            outputs += (attn_weights,)
+
+        return outputs  # a, present, (attentions)
 
 
 class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):

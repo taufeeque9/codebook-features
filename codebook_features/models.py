@@ -1625,11 +1625,11 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             kwargs: additional keyword arguments to pass to the config.
         """
         super().__init__(**kwargs)
-        if type(codebook_type) == str:
+        if isinstance(codebook_type, str):
             codebook_type = [codebook_type]
-        if type(num_codebooks) == int:
+        if isinstance(num_codebooks, int):
             num_codebooks = [num_codebooks] * len(codebook_type)
-        if type(k_codebook) == int:
+        if isinstance(k_codebook, int):
             k_codebook = [k_codebook] * len(codebook_type)
         for i in range(len(codebook_type)):
             if codebook_type[i] not in [
@@ -1708,7 +1708,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     # labels is needed in the signature so that transformers.trainer can return loss
     def forward(self, *args, labels: Optional[torch.LongTensor] = None, **kwargs):
-        """Raises an error if this method is called."""
+        """Raise an error if this method is called."""
         raise RuntimeError(
             "This shouldn't get executed as forward is overridden in init."
         )
@@ -1756,7 +1756,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             )
 
     def __getattr__(self, name):
-        """Gets attributes from the wrapped model if not found in the codebook model."""
+        """Get attributes from the wrapped model if not found in the codebook model."""
         try:
             return super().__getattr__(name)
         except AttributeError:
@@ -1768,14 +1768,14 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     @property
     def all_codebooks(self):
-        """Returns a dictionary of layer idx to all codebooks in that layer."""
+        """Get a dictionary of layer idx to all codebooks in that layer."""
         return {
             k: [v.codebook_layer for v in vl]
             for k, vl in self.all_codebook_wrappers.items()
         }
 
     def add_codebooks(self):
-        """Adds codebooks for the layers that are to be snapped."""
+        """Add codebooks for the layers that are to be snapped."""
         CODEBOOK_METHODS = {
             "transformer_block": "codebook_at_transformer",
             "mlp": "codebook_at_mlp",
@@ -1802,7 +1802,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 self.all_codebook_wrappers[i] = codebooks_in_layer
 
     def codebook_at_transformer(self, layers, i, codebooks_in_layer, i_cb):
-        """Adds codebook at the transformer block."""
+        """Add codebook at the transformer block."""
         layers[i] = TransformerLayerWrapper(
             layers[i],
             codebook_cls=self.codebook_cls[i_cb],
@@ -1822,7 +1822,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         codebooks_in_layer.append(layers[i])
 
     def codebook_at_mlp(self, layers, i, codebooks_in_layer, i_cb):
-        """Adds codebook at output of the MLP layer."""
+        """Add codebook at output of the MLP layer."""
         wrapped_mlp = MLPWrapper(
             layers[i].__getattr__(self.mlp_key),
             codebook_cls=self.codebook_cls[i_cb],
@@ -1843,7 +1843,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         codebooks_in_layer.append(wrapped_mlp)
 
     def codebook_at_mlp_mid(self, layers, i, codebooks_in_layer, i_cb):
-        """Adds codebook at the hidden layer of MLP."""
+        """Add codebook at the hidden layer of MLP."""
         mlp = layers[i].__getattr__(self.mlp_key)
         wrapped_hidden_layer = MLPWrapper(
             mlp.__getattr__(self.mlp_mid_key),
@@ -1865,7 +1865,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         codebooks_in_layer.append(wrapped_hidden_layer)
 
     def codebook_at_qkv(self, layers, i, codebooks_in_layer, i_cb):
-        """Adds a separate codebook at each of the q, k, v layers."""
+        """Add a separate codebook at each of the q, k, v layers."""
         attn = layers[i].__getattr__(self.attention_key)
         qkv = attn.__getattr__(self.qkv_key)
         wrapped_hidden_layer = MLPWrapper(
@@ -1888,7 +1888,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         codebooks_in_layer.append(wrapped_hidden_layer)
 
     def codebook_at_attention(self, layers, i, codebooks_in_layer, i_cb):
-        """Adds codebook at the output of the attention layer."""
+        """Add codebook at the output of the attention layer."""
         wrapped_attn = TransformerLayerWrapper(
             layers[i].__getattr__(self.attention_key),
             codebook_cls=self.codebook_cls[i_cb],
@@ -1909,7 +1909,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         codebooks_in_layer.append(wrapped_attn)
 
     def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer, i_cb):
-        """Adds codebook at the attention layer before the output is projected to the residual stream."""
+        """Add codebook at the attention layer before the output is projected to the residual stream."""
         codebook = self.codebook_cls[i_cb](
             dim=self.d_model,
             num_codes=self.config.num_codes,
@@ -1921,20 +1921,39 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kcodes=self.config.k_codebook[i_cb],
             **self.config.codebook_kwargs,
         )
+        extra_args = []
+        if self.base_model_cfg().model_type == "gpt_neo" and not isinstance(
+            self.base_model_cfg(), transformer_lens.HookedTransformerConfig
+        ):
+            attn_key0 = self.attention_key.split(".")[0]
+            extra_args = [layers[i].__getattr__(attn_key0).attention_type]
+
         new_block = self.pre_projection_attn_codebook_cls(
             self.base_model_cfg(),
-            i,
-            codebook,
+            *extra_args,
+            layer_idx=i,
+            codebook_layer=codebook,
         )
         codebooks_in_layer.append(new_block)
         self.codebook_params += list(codebook.parameters())
-        new_block.load_state_dict(
-            layers[i].__getattr__(self.attention_key).state_dict(), strict=False
-        )
-        layers[i].__setattr__(self.attention_key, new_block)
+        if "." in self.attention_key:
+            attn_key = self.attention_key.split(".")
+            new_block.load_state_dict(
+                layers[i]
+                .__getattr__(attn_key[0])
+                .__getattr__(attn_key[1])
+                .state_dict(),
+                strict=False,
+            )
+            layers[i].__getattr__(attn_key[0]).__setattr__(attn_key[1], new_block)
+        else:
+            new_block.load_state_dict(
+                layers[i].__getattr__(self.attention_key).state_dict(), strict=False
+            )
+            layers[i].__setattr__(self.attention_key, new_block)
 
     def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer, i_cb):
-        """Adds codebook on the summed output of attention and MLP layers."""
+        """Add codebook on the summed output of attention and MLP layers."""
         codebook = self.codebook_cls[i_cb](
             dim=self.d_model,
             num_codes=self.config.num_codes,
@@ -1957,7 +1976,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         layers[i] = pre_res_block
 
     def reset_codebook_metrics(self):
-        """Resets the metrics stored of the codebooks."""
+        """Reset the metrics stored of the codebooks."""
         for i, layers in self.all_codebooks.items():
             assert i in self.config.layers_to_snap
             for layer in layers:
@@ -1978,20 +1997,20 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 layer.snap = False
 
     def get_codebook_params(self):
-        """Gets codebook parameters."""
+        """Get codebook parameters."""
         return self.codebook_params
 
     def get_model_params(self):
-        """Gets model's original parameters (not including codebook params)."""
+        """Get model's original parameters (not including codebook params)."""
         return self.model_params
 
     def set_hook_kwargs(self, idx=None, **kwargs):
-        """Sets the hook kwargs for the codebook layers in `idx`.
+        """Set the hook kwargs for the codebook layers in `idx`.
 
         If `idx` is None, sets the hook kwargs for all codebook layers.
         """
         if idx is not None:
-            if type(idx) == int:
+            if isinstance(idx, int):
                 idx = [idx]
             for i in idx:
                 layers = self.all_codebooks[i]
@@ -2008,7 +2027,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         If `idx` is None, disables the codes in all codebook layers.
         """
         if idx is not None:
-            if type(idx) == int:
+            if isinstance(idx, int):
                 idx = [idx]
             for i in idx:
                 layers = self.all_codebooks[i]
@@ -2020,7 +2039,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 layer.disable_codes(codes)
 
     def reset_hook_kwargs(self, idx=None):
-        """Resets the hook kwargs for the codebook layers in `idx`."""
+        """Reset the hook kwargs for the codebook layers in `idx`."""
         if idx is not None:
             for layer in list(self.all_codebooks.values())[idx]:
                 layer.reset_hook_kwargs()
@@ -2030,14 +2049,14 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 layer.reset_hook_kwargs()
 
     def set_hook_fn(self, hook_fn: Callable):
-        """Sets the hook function to be called after every forward pass of every codebook layer."""
+        """Set the hook function to be called after every forward pass of every codebook layer."""
         for i, layers in self.all_codebooks.items():
             assert i in self.config.layers_to_snap
             for layer in layers:
                 layer.set_hook_fn(hook_fn)
 
     def get_triggered_codes(self):
-        """Gets the codes triggered in the last forward pass."""
+        """Get the codes triggered in the last forward pass."""
         triggered_codes = []
         for _i, layers in self.all_codebooks.items():
             for layer in layers:
@@ -2053,24 +2072,24 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         return reg
 
     def get_input_embeddings(self):
-        """Gets input embeddings of the model."""
+        """Get input embeddings of the model."""
         return self.model.get_input_embeddings()
 
     def save_kmeans_embeddings(self, path):
-        """Saves kmeans embeddings to a file."""
+        """Save kmeans embeddings to a file."""
         state_dict = self.state_dict()
         state_dict = {k: v for k, v in state_dict.items() if "codebook_layer" in k}
         torch.save(state_dict, path)
 
     def load_kmeans_embeddings(self, path):
-        """Loads kmeans embeddings from a file."""
+        """Load kmeans embeddings from a file."""
         state_dict = torch.load(path)
         missing, unexpected = self.load_state_dict(state_dict, strict=False)
         missing = [k for k in missing if "codebook_layer" in k]
         assert len(unexpected) == 0 and len(missing) == 0
 
     def init_codebook(self, dataloader):
-        """Initializes the codebook weights using kmeans."""
+        """Initialize the codebook weights using kmeans."""
         # check if `kmeans_path` exists and load kmeans embeddings
         if self.config.kmeans_path and os.path.exists(self.config.kmeans_path):
             self.load_kmeans_embeddings(self.config.kmeans_path)
@@ -2114,21 +2133,21 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 codebook.partial_fit_codebook()
 
     def enable_logging(self):
-        """Enables logging for all the codebooks."""
+        """Enable logging for all the codebooks."""
         self.logging = True
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
                 codebook.enable_logging()
 
     def disable_logging(self):
-        """Disables logging for all the codebooks."""
+        """Disable logging for all the codebooks."""
         self.logging = False
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
                 codebook.disable_logging()
 
     def replace_codes(self):
-        """Replaces the dead codebook features."""
+        """Replace the dead codebook features."""
         total_replaced_codes = 0
         for codebooks in self.all_codebooks.values():
             avg_replaced_codes = 0
@@ -2153,7 +2172,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     @abc.abstractmethod
     def itermediate_size(self) -> int:
-        """Returns the intermediate size of the model."""
+        """Return the intermediate size of the model."""
         pass
 
     @property
@@ -2170,17 +2189,17 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     @abc.abstractmethod
     def layers(self) -> Sequence[nn.Module]:
-        """Returns the list of transformer layers of the model."""
+        """Get the list of transformer layers of the model."""
         pass
 
     @abc.abstractmethod
     def num_layers(self) -> int:
-        """Returns the number of transformer layers in the model."""
+        """Get the number of transformer layers in the model."""
         pass
 
     @abc.abstractmethod
     def base_model_cfg(self):
-        """Returns the base model config."""
+        """Get the base model config."""
         pass
 
 
@@ -2206,11 +2225,11 @@ class GPT2CodebookModel(CodebookModel):
         )
 
     def layers(self):
-        """Returns the list of transformer layers of the model."""
+        """Get the list of transformer layers of the model."""
         return self.model.transformer.h  # type: ignore
 
     def num_layers(self):
-        """Returns the number of transformer layers in the model."""
+        """Get the number of transformer layers in the model."""
         return self.model.config.n_layer  # type: ignore
 
     def resize_token_embeddings(self, new_num_tokens):
@@ -2218,7 +2237,7 @@ class GPT2CodebookModel(CodebookModel):
         return self.model.resize_token_embeddings(new_num_tokens)
 
     def itermediate_size(self):
-        """Returns the intermediate size of the model."""
+        """Get the intermediate size of the model."""
         if self.model.config.n_inner is not None:
             return self.model.config.n_inner
         else:
@@ -2265,12 +2284,12 @@ class GPT2CodebookModel(CodebookModel):
         return self.model.config.hidden_size
 
     def base_model_cfg(self):
-        """Returns the base model config."""
+        """Get the base model config."""
         return self.model.config
 
 
 class GPTNeoXCodebookModel(CodebookModel):
-    """Codebook model for GPT2."""
+    """Codebook model for GPTNeoX."""
 
     def __init__(
         self,
@@ -2282,7 +2301,7 @@ class GPTNeoXCodebookModel(CodebookModel):
         Args:
         ----
             config: config for the model.
-            model: GPT2 model to apply codebooks to.
+            model: GPTNeoX model to apply codebooks to.
         """
         super().__init__(
             config=config,
@@ -2290,11 +2309,11 @@ class GPTNeoXCodebookModel(CodebookModel):
         )
 
     def layers(self):
-        """Returns the list of transformer layers of the model."""
+        """Get the list of transformer layers of the model."""
         return self.model.gpt_neox.layers
 
     def num_layers(self):
-        """Returns the number of transformer layers in the model."""
+        """Get the number of transformer layers in the model."""
         return self.model.config.num_hidden_layers
 
     def resize_token_embeddings(self, new_num_tokens):
@@ -2302,7 +2321,7 @@ class GPTNeoXCodebookModel(CodebookModel):
         raise NotImplementedError("Not implemented for GPTNeoX.")
 
     def itermediate_size(self):
-        """Returns the intermediate size of the model."""
+        """Get the intermediate size of the model."""
         return self.model.config.intermediate_size
 
     @property
@@ -2346,7 +2365,83 @@ class GPTNeoXCodebookModel(CodebookModel):
         return self.model.config.hidden_size
 
     def base_model_cfg(self):
-        """Returns the base model config."""
+        """Get the base model config."""
+        return self.model.config
+
+
+class GPTNeoCodebookModel(CodebookModel):
+    """Codebook model for GPTNeo."""
+
+    def __init__(
+        self,
+        config,
+        model,
+    ):
+        """Build the codebook based model.
+
+        Args:
+        ----
+            config: config for the model.
+            model: GPTNeo model to apply codebooks to.
+        """
+        super().__init__(
+            config=config,
+            model=model,
+        )
+
+    def layers(self):
+        """Get the list of transformer layers of the model."""
+        return self.model.transformer.h
+
+    def num_layers(self):
+        """Get the number of transformer layers in the model."""
+        return self.model.config.num_layers
+
+    def resize_token_embeddings(self, new_num_tokens):
+        """Resizes token embeddings of the model."""
+        raise NotImplementedError("Not implemented for GPTNeo.")
+
+    def itermediate_size(self):
+        """Get the intermediate size of the model."""
+        return self.model.config.intermediate_size
+
+    @property
+    def attention_key(self):
+        """Returns the attribute name used for attention in the model."""
+        return "attn.attention"
+
+    @property
+    def mlp_key(self):
+        """Returns the attribute name used for mlp in the model."""
+        return "mlp"
+
+    @property
+    def mlp_mid_key(self):
+        """Returns the attribute name used for mlp hidden layer in the model."""
+        return "act"
+
+    @property
+    def pre_projection_attn_codebook_cls(self):
+        """Returns the class to use for applying codebook to attention before projection."""
+        return mod_model_classes.PreProjectionAttentionCodebookGPTNeo
+
+    @property
+    def pre_residual_codebook_cls(self):
+        """Returns the class to use for codebook before residual."""
+        raise NotImplementedError("Not implemented for GPTNeo.")
+
+    @property
+    def num_heads(self):
+        """Returns the number of heads in the model."""
+        return self.model.config.num_heads
+
+    @property
+    def d_model(self):
+        """Returns the dimension of the model."""
+        return self.model.config.hidden_size
+
+    def base_model_cfg(self):
+        """Get the base model config."""
         return self.model.config
 
 
@@ -2380,11 +2475,11 @@ class HookedTransformerCodebookModel(CodebookModel):
         )
 
     def layers(self):
-        """Returns the list of transformer layers of the model."""
+        """Get the list of transformer layers of the model."""
         return self.model.blocks
 
     def num_layers(self):
-        """Returns the number of transformer layers in the model."""
+        """Get the number of transformer layers in the model."""
         return self.model.cfg.n_layers
 
     def resize_token_embeddings(self, new_num_tokens):
@@ -2392,7 +2487,7 @@ class HookedTransformerCodebookModel(CodebookModel):
         raise NotImplementedError("Not implemented for HookedTransformer.")
 
     def itermediate_size(self):
-        """Returns the intermediate size of the model."""
+        """Get the intermediate size of the model."""
         return self.model.cfg.d_mlp
 
     @property
@@ -2443,12 +2538,12 @@ class HookedTransformerCodebookModel(CodebookModel):
         return self.model.cfg.device
 
     def base_model_cfg(self):
-        """Returns the base model config."""
+        """Get the base model config."""
         return self.model.cfg
 
 
 def wrap_codebook(model_or_path, config=None, pretrained_path=None):
-    """Wraps a model with codebooks."""
+    """Wrap a model with codebooks."""
     if isinstance(model_or_path, str):
         model = transformers.AutoModelForCausalLM.from_pretrained(model_or_path)
     elif isinstance(model_or_path, transformers.PreTrainedModel):
@@ -2462,6 +2557,8 @@ def wrap_codebook(model_or_path, config=None, pretrained_path=None):
             return GPT2CodebookModel.from_pretrained(pretrained_path, model)
         elif model.config.model_type == "gpt_neox":
             return GPTNeoXCodebookModel.from_pretrained(pretrained_path, model)
+        elif model.config.model_type == "gpt_neo":
+            return GPTNeoCodebookModel.from_pretrained(pretrained_path, model)
         else:
             raise ValueError(
                 f"Model type {model.config.model_type} not supported with codebooks."
@@ -2473,6 +2570,8 @@ def wrap_codebook(model_or_path, config=None, pretrained_path=None):
         return GPT2CodebookModel(config, model)
     elif model.config.model_type == "gpt_neox":
         return GPTNeoXCodebookModel(config, model)
+    elif model.config.model_type == "gpt_neo":
+        return GPTNeoCodebookModel(config, model)
     else:
         raise ValueError(
             f"Model type {model.config.model_type} not supported with codebooks."
@@ -2480,7 +2579,7 @@ def wrap_codebook(model_or_path, config=None, pretrained_path=None):
 
 
 def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs=None):
-    """Wraps a hooked tranformer model with codebooks."""
+    """Wrap a hooked tranformer model with codebooks."""
     if hooked_kwargs is None:
         hooked_kwargs = {}
     model = transformer_lens.HookedTransformer.from_pretrained(
@@ -2518,9 +2617,9 @@ def convert_to_hooked_model_for_toy(
     config,
     hooked_kwargs=None,
 ):
-    """Wraps a hooked tranformer model with codebooks."""
+    """Wrap a hooked tranformer model with codebooks."""
     hooked_config = loading.convert_hf_model_config(model_path, config)
-    model = transformer_lens.HookedTransformer(hooked_config)
+    model = transformer_lens.HookedTransformer(hooked_config, **hooked_kwargs)
     if hooked_kwargs is None:
         hooked_kwargs = {}
     if "device" in hooked_kwargs:
@@ -2549,7 +2648,7 @@ def convert_to_hooked_model_for_toy(
 
 
 def convert_state_dict(model, cfg: transformer_lens.HookedTransformerConfig):
-    """Converts a state_dict from a HuggingFace model to a state_dict compatible with HookedTransformer."""
+    """Convert a state_dict from a HuggingFace model to a state_dict compatible with HookedTransformer."""
     if cfg.original_architecture == "GPT2LMHeadModel":
         return transformer_lens.loading.convert_gpt2_weights(model, cfg)
     elif cfg.original_architecture == "GPTNeoForCausalLM":

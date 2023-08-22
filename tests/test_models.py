@@ -81,6 +81,20 @@ def test_evaluate():
     assert metrics is not None
 
 
+def compare_input_on_hooked_model(input, orig_model, hooked_model):
+    """Compare input on original and hooked model."""
+    if isinstance(input, str):
+        input = hooked_model.tokenizer(input, return_tensors="pt")["input_ids"]
+    if torch.cuda.is_available():
+        orig_model = orig_model.cuda()
+        hooked_model = hooked_model.cuda()
+        input = input.cuda()
+
+    orig_output = orig_model(input)["logits"]
+    hooked_output = hooked_model(input)
+    assert torch.allclose(orig_output, hooked_output)
+
+
 @pytest.mark.parametrize("codebook_at", ["attention", "preproj_attention", "mlp"])
 def test_hooked_transformer_codebook_model(codebook_at):
     """Test HookedTransformerCodebookModel."""

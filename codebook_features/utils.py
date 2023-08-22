@@ -1,15 +1,82 @@
 """Util functions for codebook features."""
 import re
 import typing
-from collections import namedtuple
+from dataclasses import dataclass
 from functools import partial
+from typing import Optional
 
+import numpy as np
 import plotly.express as px
 import torch
 import torch.nn.functional as F
 from termcolor import colored
 from tqdm import tqdm
 from transformer_lens import utils as tl_utils
+
+
+@dataclass
+class CodeInfo:
+    """Dataclass for codebook info."""
+
+    code: int
+    layer: int
+    head: Optional[int]
+    cb_at: Optional[str] = None
+
+    # for patching interventions
+    pos: Optional[int] = None
+    code_pos: Optional[int] = -1
+
+    # for description & regex-based interpretation
+    description: Optional[str] = None
+    regex: Optional[str] = None
+    prec: Optional[float] = None
+    recall: Optional[float] = None
+    num_acts: Optional[int] = None
+
+    def __post_init__(self):
+        """Convert to appropriate types."""
+        self.code = int(self.code)
+        self.layer = int(self.layer)
+        if self.head:
+            self.head = int(self.head)
+        if self.pos:
+            self.pos = int(self.pos)
+        if self.code_pos:
+            self.code_pos = int(self.code_pos)
+        if self.prec:
+            self.prec = float(self.prec)
+            assert 0 <= self.prec <= 1
+        if self.recall:
+            self.recall = float(self.recall)
+            assert 0 <= self.recall <= 1
+        if self.num_acts:
+            self.num_acts = int(self.num_acts)
+
+    def check_description_info(self):
+        """Check if the regex info is present."""
+        assert self.num_acts is not None and self.description is not None
+        if self.regex is not None:
+            assert self.prec is not None and self.recall is not None
+
+    def check_patch_info(self):
+        """Check if the patch info is present."""
+        # TODO: pos can be none for patching
+        assert self.pos is not None and self.code_pos is not None
+
+    def __repr__(self):
+        """Return the string representation."""
+        repr = f"CodeInfo(code={self.code}, layer={self.layer}, head={self.head}, cb_at={self.cb_at}"
+        if self.pos is not None or self.code_pos is not None:
+            repr += f", pos={self.pos}, code_pos={self.code_pos}"
+        if self.description is not None:
+            repr += f", description={self.description}"
+        if self.regex is not None:
+            repr += f", regex={self.regex}, prec={self.prec}, recall={self.recall}"
+        if self.num_acts is not None:
+            repr += f", num_acts={self.num_acts}"
+        repr += ")"
+        return repr
 
 
 def imshow(tensor, renderer=None, xaxis="", yaxis="", **kwargs):
@@ -96,113 +163,192 @@ def normalize_patched_logit_diff(
     )
 
 
-def features_to_tokens(cb_key, cb_acts, num_codes, n=10):
-    """Returns the set of token ids each codebook feature activates on."""
+def features_to_tokens(cb_key, cb_acts, num_codes, code=None):
+    """Return the set of token ids each codebook feature activates on."""
     codebook_ids = cb_acts[cb_key]
-    features_tokens = [[] for _ in range(num_codes)]
-    for i in tqdm(range(codebook_ids.shape[0])):
-        for j in range(codebook_ids.shape[1]):
-            for k in range(codebook_ids.shape[2]):
-                features_tokens[codebook_ids[i, j, k]].append((i, j))
+
+    if code is None:
+        features_tokens = [[] for _ in range(num_codes)]
+        for i in tqdm(range(codebook_ids.shape[0])):
+            for j in range(codebook_ids.shape[1]):
+                for k in range(codebook_ids.shape[2]):
+                    features_tokens[codebook_ids[i, j, k]].append((i, j))
+    else:
+        idx0, idx1, _ = np.where(codebook_ids == code)
+        features_tokens = list(zip(idx0, idx1))
 
     return features_tokens
 
 
-def color_red(tokens, red_idx, tokenizer, n=3, separate_states=True):
+def color_str(s: str, color: str, html: bool):
+    """Color the string for html or terminal."""
+    if html:
+        return f"<span style='color:{color}'>{s}</span>"
+    else:
+        return colored(s, color)
+
+
+def color_tokens_red_automata(tokens, red_idx, html=False):
     """Separate states with a dash and color red the tokens in red_idx."""
     ret_string = ""
     itr_over_red_idx = 0
     tokens_enumerate = enumerate(tokens)
-    if tokens[0] == tokenizer.bos_token_id:
+    if tokens[0] == "<|endoftext|>":
         next(tokens_enumerate)
         if red_idx[0] == 0:
             itr_over_red_idx += 1
-    last_colored_token_dist = 0
-    last_token_added = 0
     for i, c in tokens_enumerate:
-        if separate_states and i % 2 == 1:
+        if i % 2 == 1:
             ret_string += "-"
         if itr_over_red_idx < len(red_idx) and i == red_idx[itr_over_red_idx]:
-            c_str = tokenizer.decode(c)
-            if last_colored_token_dist > n + 1:  # missed at least one token
-                if last_token_added + 1 < i - n:
-                    ret_string += " ... "
-                ret_string += tokenizer.decode(
-                    tokens[max(last_token_added + 1, i - n) : i]
-                )
-            ret_string += colored(c_str, "red")
-            last_token_added = i
+            ret_string += color_str(c, "red", html)
             itr_over_red_idx += 1
-            last_colored_token_dist = 0
-        elif last_colored_token_dist <= n:
-            ret_string += tokenizer.decode(c)
-            last_token_added = i
-        last_colored_token_dist += 1
+        else:
+            ret_string += c
     return ret_string
 
 
-def tkn_print(ll, tokens, tokenizer, separate_states, n=3, max_examples=20):
-    """Formats and prints the tokens in ll."""
-    # indices = np.random.choice(len(ll), min(len(ll), max_examples), replace=False)
+def color_tokens_red(tokens, red_idx, n=3, html=False):
+    """Color red the tokens in red_idx."""
+    ret_string = ""
+    last_colored_token_idx = -1
+    for i in red_idx:
+        c_str = tokens[i]
+        if i <= last_colored_token_idx + 2 * n + 1:
+            ret_string += "".join(tokens[last_colored_token_idx + 1 : i])
+        else:
+            ret_string += "".join(
+                tokens[last_colored_token_idx + 1 : last_colored_token_idx + n + 1]
+            )
+            ret_string += " ... "
+            ret_string += "".join(tokens[i - n : i])
+        ret_string += color_str(c_str, "red", html)
+        last_colored_token_idx = i
+    ret_string += "".join(
+        tokens[
+            last_colored_token_idx + 1 : min(last_colored_token_idx + n, len(tokens))
+        ]
+    )
+    return ret_string
+
+
+def prepare_example_print(
+    example_id,
+    example_tokens,
+    tokens_to_color_red,
+    html,
+    color_red_fn=color_tokens_red,
+):
+    """Format example to print."""
+    example_output = color_str(example_id, "green", html)
+    example_output += (
+        ": "
+        + color_red_fn(example_tokens, tokens_to_color_red, html=html)
+        + ("<br>" if html else "\n")
+    )
+    return example_output
+
+
+def tkn_print(
+    ll,
+    tokens,
+    separate_states,
+    n=3,
+    max_examples=100,
+    randomize=False,
+    html=False,
+    return_example_list=False,
+):
+    """Format and prints the tokens in ll."""
+    if randomize:
+        raise NotImplementedError("Randomize not yet implemented.")
     indices = range(len(ll))
-    print_output = ""
-    current_example = 0
+    print_output = [] if return_example_list else ""
+    curr_ex = ll[0][0]
     total_examples = 0
     tokens_to_color_red = []
+    color_red_fn = (
+        color_tokens_red_automata if separate_states else partial(color_tokens_red, n=n)
+    )
     for idx in indices:
         if total_examples > max_examples:
             break
         i, j = ll[idx]
 
-        if i != current_example:
-            if current_example != 0:
-                print_output += (
-                    f"{current_example}: "
-                    + color_red(
-                        tokens[current_example],
-                        tokens_to_color_red,
-                        tokenizer,
-                        n=n,
-                        separate_states=separate_states,
-                    )
-                    + "\n"
-                )
-                total_examples += 1
-            current_example = i
+        if i != curr_ex and curr_ex >= 0:
+            curr_ex_output = prepare_example_print(
+                curr_ex,
+                tokens[curr_ex],
+                tokens_to_color_red,
+                html,
+                color_red_fn,
+            )
+            total_examples += 1
+            if return_example_list:
+                print_output.append((curr_ex_output, len(tokens_to_color_red)))
+            else:
+                print_output += curr_ex_output
+            curr_ex = i
             tokens_to_color_red = []
         tokens_to_color_red.append(j)
+    curr_ex_output = prepare_example_print(
+        curr_ex,
+        tokens[curr_ex],
+        tokens_to_color_red,
+        html,
+        color_red_fn,
+    )
+    if return_example_list:
+        print_output.append((curr_ex_output, len(tokens_to_color_red)))
+    else:
+        print_output += curr_ex_output
+        asterisk_str = "********************************************"
+        print_output += color_str(asterisk_str, "green", html)
+    total_examples += 1
 
-    print_output += colored("********************************************", "green")
     return print_output
 
 
 def print_ft_tkns(
     ft_tkns,
     tokens,
-    tokenizer,
     separate_states=False,
     n=3,
     start=0,
     stop=1000,
     indices=None,
-    max_examples=200,
+    max_examples=100,
+    freq_filter=None,
+    randomize=False,
+    html=False,
+    return_example_list=False,
 ):
-    """Prints the tokens for the codebook features."""
+    """Print the tokens for the codebook features."""
     indices = list(range(start, stop)) if indices is None else indices
     num_tokens = len(tokens) * len(tokens[0])
-    token_act_freqs = []
-    token_acts = []
+    codes, token_act_freqs, token_acts = [], [], []
     for i in indices:
         tkns = ft_tkns[i]
-        token_act_freqs.append(100 * len(tkns) / num_tokens)
+        freq = (len(tkns), 100 * len(tkns) / num_tokens)
+        if freq_filter is not None and freq[1] > freq_filter:
+            continue
+        codes.append(i)
+        token_act_freqs.append(freq)
         if len(tkns) > 0:
             tkn_acts = tkn_print(
-                tkns, tokens, tokenizer, separate_states, n=n, max_examples=max_examples
+                tkns,
+                tokens,
+                separate_states,
+                n=n,
+                max_examples=max_examples,
+                randomize=randomize,
+                html=html,
+                return_example_list=return_example_list,
             )
             token_acts.append(tkn_acts)
         else:
             token_acts.append("")
-    return token_act_freqs, token_acts
+    return codes, token_act_freqs, token_acts
 
 
 def patch_in_codes(run_cb_ids, hook, pos, code, code_pos=None):
@@ -300,11 +446,6 @@ def run_with_codes(
     return patched_logits, patched_cache
 
 
-CodeInfoTuple = namedtuple(
-    "CodeInfoTuple", ["code", "cb_at", "layer", "head", "pos", "code_pos"]
-)
-
-
 def in_hook_list(list_of_arg_tuples, layer, head=None):
     """Check if the component specified by `layer` and `head` is in the `list_of_arg_tuples`."""
     # if head is not provided, then checks in MLP
@@ -356,7 +497,6 @@ def generate_with_codes(
                 )
     with cb_model.hooks(fwd_hooks, [], True, False) as hooked_model:
         gen = hooked_model.generate(input, **generate_kwargs)
-        print(gen)
     return automata.seq_to_traj(gen)[0] if automata is not None else gen
 
 
@@ -417,7 +557,7 @@ def find_code_changes(cache1, cache2, pos=None):
 
 
 def common_codes_in_cache(cache_codes, threshold=0.0):
-    """Returns the common code in the cache."""
+    """Get the common code in the cache."""
     codes, counts = torch.unique(cache_codes, return_counts=True, sorted=True)
     counts = counts.float() * 100
     counts /= cache_codes.shape[1]
@@ -426,3 +566,41 @@ def common_codes_in_cache(cache_codes, threshold=0.0):
     indices = counts > threshold
     codes, counts = codes[indices], counts[indices]
     return codes, counts
+
+
+def parse_code_info_string(
+    info_str: str, cb_at="attn", pos=None, code_pos=-1
+) -> CodeInfo:
+    """Parse the code info string.
+
+    The format of the `info_str` is:
+    `code: 0, layer: 0, head: 0, occ_freq: 0.0, train_act_freq: 0.0`.
+    """
+    code, layer, head, occ_freq, train_act_freq = info_str.split(", ")
+    code = int(code.split(": ")[1])
+    layer = int(layer.split(": ")[1])
+    head = int(head.split(": ")[1]) if head else None
+    occ_freq = float(occ_freq.split(": ")[1])
+    train_act_freq = float(train_act_freq.split(": ")[1])
+    return CodeInfo(code, layer, head, pos=pos, code_pos=code_pos, cb_at=cb_at)
+
+
+def parse_concept_codes_string(info_str: str, pos=None, code_append=False):
+    """Parse the concept codes string."""
+    code_info_strs = info_str.strip().split("\n")
+    concept_codes = []
+    layer, head = None, None
+    code_pos = "append" if code_append else -1
+    for code_info_str in code_info_strs:
+        concept_codes.append(
+            parse_code_info_string(code_info_str, pos=pos, code_pos=code_pos)
+        )
+        if code_append:
+            continue
+        if layer == concept_codes[-1].layer and head == concept_codes[-1].head:
+            code_pos -= 1
+        else:
+            code_pos = -1
+        concept_codes[-1].code_pos = code_pos
+        layer, head = concept_codes[-1].layer, concept_codes[-1].head
+    return concept_codes

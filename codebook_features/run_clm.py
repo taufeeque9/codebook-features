@@ -41,9 +41,15 @@ import torch
 import transformers
 from datasets import load_dataset
 from transformers import (  # HfArgumentParser,; TrainingArguments,
-    CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig,
-    AutoModelForCausalLM, AutoTokenizer, default_data_collator,
-    is_torch_tpu_available, set_seed)
+    CONFIG_MAPPING,
+    MODEL_FOR_CAUSAL_LM_MAPPING,
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    default_data_collator,
+    is_torch_tpu_available,
+    set_seed,
+)
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
@@ -53,10 +59,10 @@ from codebook_features import models
 from codebook_features import trainer as codebook_trainer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.25.1")
+# check_min_version("4.31.0")
 
 require_version(
-    "datasets>=1.8.0",
+    "datasets>=2.0.0",
     "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt",
 )
 
@@ -136,6 +142,25 @@ class ModelArguments:
             )
         },
     )
+    torch_dtype: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the "
+                "dtype will be automatically derived from the model's weights."
+            ),
+            "choices": ["auto", "bfloat16", "float16", "float32"],
+        },
+    )
+    low_cpu_mem_usage: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "It is an option to create the model as an empty shell, then only materialize its parameters when the pretrained weights are loaded."
+                "set True will benefit LLM loading time and RAM consumption."
+            )
+        },
+    )
 
     def __post_init__(self):
         if self.config_overrides is not None and (
@@ -189,7 +214,7 @@ class DataTrainingArguments:
             )
         },
     )
-
+    streaming: bool = field(default=False, metadata={"help": "Enable streaming mode"})
     block_size: Optional[int] = field(
         default=None,
         metadata={
@@ -218,12 +243,12 @@ class DataTrainingArguments:
         default=True,
         metadata={"help": "Whether to keep line breaks when using TXT files or not."},
     )
-    streaming: bool = field(
-        default=True,
-        metadata={"help": "Whether to stream the dataset instead of downloading."},
-    )
 
     def __post_init__(self):
+        if self.streaming:
+            require_version(
+                "datasets>=2.0.0", "The streaming feature requires `datasets>=2.0.0`"
+            )
         if (
             self.dataset_name is None
             and self.train_file is None
@@ -328,6 +353,10 @@ def get_trainer_and_dataset(
         datefmt="%m/%d/%Y %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+
+    if training_args.should_log:
+        # The default of training_args.log_level is passive, so we set log level at info here to have that default.
+        transformers.utils.logging.set_verbosity_info()
 
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
@@ -518,6 +547,11 @@ def get_trainer_and_dataset(
         )
     if model is None:
         if model_args.model_name_or_path:
+            torch_dtype = (
+                model_args.torch_dtype
+                if model_args.torch_dtype in ["auto", None]
+                else getattr(torch, model_args.torch_dtype)
+            )
             model = AutoModelForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
                 from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -525,6 +559,8 @@ def get_trainer_and_dataset(
                 cache_dir=model_args.cache_dir,
                 revision=model_args.model_revision,
                 use_auth_token=True if model_args.use_auth_token else None,
+                torch_dtype=torch_dtype,
+                low_cpu_mem_usage=model_args.low_cpu_mem_usage,
             )
         else:
             model = AutoModelForCausalLM.from_config(config)
@@ -545,15 +581,9 @@ def get_trainer_and_dataset(
     # First we tokenize all the texts.
 
     if training_args.do_train:
-        if isinstance(raw_datasets["train"], datasets.IterableDataset):
-            column_names = list(raw_datasets["train"].features.keys())
-        else:
-            column_names = raw_datasets["train"].column_names
+        column_names = list(raw_datasets["train"].features)
     else:
-        if isinstance(raw_datasets["validation"], datasets.IterableDataset):
-            column_names = list(raw_datasets["validation"].features.keys())
-        else:
-            column_names = raw_datasets["validation"].column_names
+        column_names = list(raw_datasets["validation"].features)
     text_column_name = "text" if "text" in column_names else column_names[0]
 
     # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
@@ -573,13 +603,7 @@ def get_trainer_and_dataset(
         return output
 
     with training_args.main_process_first(desc="dataset map tokenization"):
-        if isinstance(list(raw_datasets.values())[0], datasets.IterableDataset):
-            tokenized_datasets = raw_datasets.map(
-                tokenize_function,
-                batched=True,
-                remove_columns=column_names,
-            )
-        else:
+        if not data_args.streaming:
             tokenized_datasets = raw_datasets.map(
                 tokenize_function,
                 batched=True,
@@ -588,13 +612,20 @@ def get_trainer_and_dataset(
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on dataset",
             )
+        else:
+            tokenized_datasets = raw_datasets.map(
+                tokenize_function,
+                batched=True,
+                remove_columns=column_names,
+            )
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
         if block_size > 1024:
             logger.warning(
-                f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
-                "Picking 1024 instead. You can change that default value by passing --block_size xxx."
+                "The chosen tokenizer supports a `model_max_length` that is longer than the default `block_size` value"
+                " of 1024. If you would like to use a longer `block_size` up to `tokenizer.model_max_length` you can"
+                " override this default with `--block_size xxx`."
             )
             block_size = 1024
     else:
@@ -610,10 +641,9 @@ def get_trainer_and_dataset(
         # Concatenate all texts.
         concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
         total_length = len(concatenated_examples[list(examples.keys())[0]])
-        # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-        # customize this part to your needs.
-        if total_length >= block_size:
-            total_length = (total_length // block_size) * block_size
+        # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
+        # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
+        total_length = (total_length // block_size) * block_size
         # Split by chunks of max_len.
         result = {
             k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
@@ -630,18 +660,18 @@ def get_trainer_and_dataset(
     # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
 
     with training_args.main_process_first(desc="grouping texts together"):
-        if isinstance(list(raw_datasets.values())[0], datasets.IterableDataset):
-            lm_datasets = tokenized_datasets.map(
-                group_texts,
-                batched=True,
-            )
-        else:
+        if not data_args.streaming:
             lm_datasets = tokenized_datasets.map(
                 group_texts,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc=f"Grouping texts in chunks of {block_size}",
+            )
+        else:
+            lm_datasets = tokenized_datasets.map(
+                group_texts,
+                batched=True,
             )
 
     if training_args.do_train:
@@ -699,7 +729,7 @@ def get_trainer_and_dataset(
         optimizers=optimizers,
         callbacks=callbacks,
     )
-    return trainer, lm_datasets, last_checkpoint
+    return trainer, lm_datasets, raw_datasets, last_checkpoint
 
 
 def run_trainer(

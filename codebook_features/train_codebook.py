@@ -59,14 +59,14 @@ def prepare_logging(cfg, training_args):
     return cfg_dict, tags
 
 
-def get_baseline(training_args, model_args, data_args, model, baseline_output_dir):
+def get_baseline(training_args, model_args, data_args, model):
     """Get baseline metrics for the original model (no codebooks applied)."""
     baseline_output_dir = training_args.output_dir + "_baseline"
     eval_args = dataclasses.replace(
         training_args,
         output_dir=baseline_output_dir,
     )
-    trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
+    trainer, lm_datasets, _, last_checkpoint = run_clm.get_trainer_and_dataset(
         model_args,
         data_args,
         eval_args,
@@ -170,7 +170,7 @@ def main(cfg):
         )
         callbacks.append(k_scheduler)
 
-    trainer, lm_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
+    trainer, lm_datasets, _, last_checkpoint = run_clm.get_trainer_and_dataset(
         model_args,
         data_args,
         training_args,

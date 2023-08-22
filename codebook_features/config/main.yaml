@@ -20,10 +20,13 @@ training_args:
   logging_first_step: True
   logging_steps: 50
   evaluation_strategy: steps
-  eval_steps: 50
-  save_steps: 10000
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 2
+  load_best_model_at_end: True
   ddp_find_unused_parameters: False
   tf32: True
+  dataloader_num_workers: 4
 
   train_model_params: True
   model_lr_factor: 1
