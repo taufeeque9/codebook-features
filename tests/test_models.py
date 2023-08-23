@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import transformers
 
 from codebook_features import evaluation, models, run_clm
 
@@ -200,3 +201,19 @@ def test_hook_kwargs_not_keep_all_codes_returns_zero2(hooked_model):
         elif "hook_mlp_out" in k:
             assert torch.isin(v, 0).all().item()
             assert torch.isin(v, 0).all().item()
+
+
+def test_codebook_with_faiss():
+    """Test the FaissSnapFn class."""
+    model_path = "taufeeque/tiny-gpt2"
+    config = models.CodebookModelConfig(layers_to_snap="all", k_codebook=10)
+    model_args = run_clm.ModelArguments(model_name_or_path=model_path)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_path)
+    model = models.wrap_codebook(
+        model_or_path=model_args.model_name_or_path, config=config
+    )
+    model.use_faiss()
+    sentence = "this is a random sentence to test."
+    input = tokenizer(sentence, return_tensors="pt")["input_ids"]
+    output = model(input)
+    assert output is not None

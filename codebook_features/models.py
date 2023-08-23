@@ -3,7 +3,7 @@
 import abc
 import os
 import re
-from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Type, Union
 
 import numpy as np
 import torch
@@ -17,6 +17,12 @@ from transformer_lens.hook_points import HookPoint
 from vqtorch import nn as vqtorch_nn
 
 from codebook_features import mod_model_classes
+
+try:
+    import faiss
+    import faiss.contrib.torch_utils
+except ImportError:
+    faiss = None
 
 
 class KMeansEmbedding(nn.Embedding):
@@ -39,7 +45,6 @@ class KMeansEmbedding(nn.Embedding):
         """Create K-Means Embedding.
 
         Args:
-        ----
             num_embeddings: size of the dictionary of embeddings
             embedding_dim: the size of each embedding vector
             padding_idx: padding index. Defaults to None.
@@ -75,7 +80,6 @@ class KMeansEmbedding(nn.Embedding):
         """Load a batch of data.
 
         Args:
-        ----
             data: batch of data.
         """
         with torch.no_grad():
@@ -99,7 +103,6 @@ class KMeansEmbedding(nn.Embedding):
         """Initialize the embeddings after all the data is loaded.
 
         Args:
-        ----
             k: number of cluster centers for K-Means.
         """
         self.weight.data = torch.from_numpy(self.kmeans.cluster_centers_).to(
@@ -122,7 +125,6 @@ class BaseSnapFunction(torch.autograd.Function):
         """Backward pass for the snap function using straight-through operator.
 
         Args:
-        ----
             ctx: torch context used for efficiently storing tensors for backward pass.
             grad_outputs: gradient tensor of the outputs.
             grad_codebook_ids: gradient tensor of `codebook_ids`.
@@ -188,7 +190,6 @@ class InnerProductSnapFunction(BaseSnapFunction):
         having highest dot-product.
 
         Args:
-        ----
             ctx: torch context used for efficiently storing tensors for backward pass.
             inputs: input data.
             codebook: codebook matrix. Shape: (num_features, hidden_dim_size).
@@ -201,10 +202,7 @@ class InnerProductSnapFunction(BaseSnapFunction):
         cb_norm = torch.linalg.vector_norm(codebook, dim=-1).reshape(1, 1, -1)
         logits = torch.matmul(inputs, codebook.T) / cb_norm
         if hook_kwargs["cosine"]:
-            logits = logits / (
-                torch.norm(inputs, dim=-1, keepdim=True)
-                * torch.norm(codebook, dim=-1, keepdim=True).T
-            )
+            logits = logits / torch.norm(inputs, dim=-1, keepdim=True)
         if hook_kwargs["keep_k_codes"]:
             if hook_kwargs["disable_for_tkns"] == "all":
                 logits[:, :, hook_kwargs["disable_codes"]] = float("-inf")
@@ -267,7 +265,6 @@ class EuclideanSnapFunction(BaseSnapFunction):
         having highest dot-product.
 
         Args:
-        ----
             ctx: torch context used for efficiently storing tensors for backward pass.
             inputs: input data.
             codebook: codebook matrix. Shape: (num_features, hidden_dim_size).
@@ -327,6 +324,53 @@ class EuclideanSnapFunction(BaseSnapFunction):
         return outputs.detach().clone(), codebook_ids
 
 
+class FaissSnapFunction(BaseSnapFunction):
+    """Snap function using the faiss library."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        codebook_idx: faiss.Index,
+        inputs: torch.Tensor,
+        codebook: torch.Tensor,
+        kcodes: int,
+        hook_kwargs: Mapping[str, Any],
+    ) -> torch.Tensor:
+        """Compute output of the snap function using the faiss library.
+
+        Replaces each dimension vector of input with the closest features from codebook.
+
+        Args:
+            ctx: torch context used for efficiently storing tensors for backward pass.
+            inputs: input data.
+            codebook: codebook matrix. Shape: (num_features, hidden_dim_size).
+            codebook_idx: faiss index of the codebook.
+            kcodes: number of codebook features to use for computing the output.
+            hook_kwargs: dictionary of hook arguments.
+
+        Returns: tuple of output of snap function and the IDs of closest codebook features.
+        """
+        # assumes normalized codebooks
+        logits, codebook_ids = codebook_idx.search(
+            inputs.reshape(-1, inputs.shape[-1]), kcodes
+        )
+        logits, codebook_ids = logits.reshape(
+            *(inputs.shape[:-1]), -1
+        ), codebook_ids.reshape(*(inputs.shape[:-1]), -1)
+        if hook_kwargs["cosine"]:
+            logits = logits / torch.norm(inputs, dim=-1, keepdim=True)
+        if hook_kwargs["disable_codes"] or hook_kwargs["disable_topk"]:
+            raise NotImplementedError("Disabling codes not implemented for faiss.")
+        outputs = torch.nn.functional.embedding(codebook_ids, codebook)
+        outputs = outputs.sum(dim=-2) / kcodes
+        return outputs, codebook_ids
+
+    @staticmethod
+    def backward(ctx, grad_outputs, grad_codebook_ids):
+        """Backward pass for the snap function."""
+        raise NotImplementedError("Backward pass not implemented for faiss.")
+
+
 class CodebookLayer(nn.Module):
     """Codebook layer module."""
 
@@ -348,7 +392,6 @@ class CodebookLayer(nn.Module):
         """Create the codebook layer.
 
         Args:
-        ----
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             key: key to identify the codebook in hook caches.
@@ -393,6 +436,31 @@ class CodebookLayer(nn.Module):
         self.replace_rho = replace_rho
         self.steps_since_replacement = 0
 
+    def normalize_L2(self):
+        """Normalize the codebook features."""
+        self.codebook.weight.data = torch.nn.functional.normalize(
+            self.codebook.weight.data,
+            p=2,
+            dim=-1,
+        )
+
+    def use_faiss(self):
+        """Use faiss for snap function."""
+        self.snap_fn = FaissSnapFunction
+        index_cls = (
+            faiss.IndexFlatIP
+            if self.snap_fn == InnerProductSnapFunction
+            else faiss.IndexFlatL2
+        )
+        self.faiss_index = index_cls(self.codebook.weight.shape[-1])
+        device = self.codebook.weight.device.type
+        if device != "cpu":
+            res = faiss.StandardGpuResources()  # use a single GPU
+            self.faiss_index = faiss.index_cpu_to_gpu(res, 0, self.faiss_index)
+
+        self.normalize_L2()
+        self.faiss_index.add(self.codebook.weight.detach())
+
     @property
     def active_codes(self):
         """Return the number of active codes."""
@@ -415,7 +483,6 @@ class CodebookLayer(nn.Module):
         """Initialize the codebook using k-means.
 
         Args:
-        ----
             data: data to use for initializing the codebook.
         """
         assert isinstance(self.codebook, KMeansEmbedding)
@@ -429,7 +496,6 @@ class CodebookLayer(nn.Module):
         """Set the hook function.
 
         Args:
-        ----
             hook_fn: hook function to use.
         """
         self.hook_fn = hook_fn
@@ -438,7 +504,6 @@ class CodebookLayer(nn.Module):
         """Snaps activations to elements in the codebook.
 
         Args:
-        ----
             x: input tensor of shape: (batch_size, seq_len, dim).
 
         Returns: output with the feature vectors replaced using the codebook.
@@ -447,12 +512,21 @@ class CodebookLayer(nn.Module):
         if not self.soft_snap:
             # Hard choice of a single codebook vector
             normalized_input = self.ln(x)
-            output, codebook_ids = self.snap_fn.apply(
-                normalized_input,
-                self.codebook.weight,
-                self.kcodes,
-                self.hook_kwargs,
-            )  # type: ignore
+            if self.snap_fn == FaissSnapFunction:
+                output, codebook_ids = self.snap_fn.apply(
+                    self.faiss_index,
+                    normalized_input,
+                    self.codebook.weight,
+                    self.kcodes,
+                    self.hook_kwargs,
+                )
+            else:
+                output, codebook_ids = self.snap_fn.apply(
+                    normalized_input,
+                    self.codebook.weight,
+                    self.kcodes,
+                    self.hook_kwargs,
+                )  # type: ignore
             codebook_ids = self.hook_codebook_ids(codebook_ids)
             if not self.training:
                 block_idx = torch.isin(codebook_ids, -1)
@@ -536,7 +610,6 @@ class CodebookLayer(nn.Module):
         """Disable the given codes.
 
         Args:
-        ----
             codes: list of codes to disable.
         """
         if isinstance(codes, int):
@@ -641,7 +714,6 @@ class CompositionalCodebookLayer(nn.Module):
         """Create the compositional codebook layer.
 
         Args:
-        ----
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             key: key to identify the codebook in hook caches.
@@ -686,6 +758,16 @@ class CompositionalCodebookLayer(nn.Module):
             ]
         )
         self.hook_fn = hook_fn
+
+    def normalize_L2(self):
+        """Normalize the codebook features."""
+        for codebook in self.codebook:
+            codebook.normalize_L2()
+
+    def use_faiss(self):
+        """Use faiss for snap function."""
+        for codebook in self.codebook:
+            codebook.use_faiss()
 
     def get_triggered_codes(self):
         """Return the triggered codes of the codebooks."""
@@ -751,10 +833,9 @@ class CompositionalCodebookLayer(nn.Module):
             codebook.set_hook_fn(hook_fn)
 
     def forward(self, x):
-        """Snaps activations to elements in the codebook.
+        """Snap activations to elements in the codebook.
 
         Args:
-        ----
             x: input tensor of shape: (batch_size, seq_len, dim) or (batch_size, seq_len, num_heads, dim).
 
         Returns: output with the feature vectors replaced using the compositional codebook.
@@ -781,7 +862,7 @@ class CompositionalCodebookLayer(nn.Module):
     def set_hook_kwargs(self, head_idx=None, **kwargs):
         """Set the hook kwargs for the codebooks."""
         if head_idx is not None:
-            if type(head_idx) == int:
+            if isinstance(head_idx, int):
                 head_idx = [head_idx]
             for i in head_idx:
                 self.codebook[i].set_hook_kwargs(**kwargs)
@@ -793,12 +874,11 @@ class CompositionalCodebookLayer(nn.Module):
         """Disable the given codes.
 
         Args:
-        ----
             codes: a code or a list of codes to disable.
             head_idx: index of the head to disable the codes for.
         """
         if head_idx is not None:
-            if type(head_idx) == int:
+            if isinstance(head_idx, int):
                 head_idx = [head_idx]
             for i in head_idx:
                 self.codebook[i].disable_codes(codes)
@@ -850,7 +930,7 @@ class CompositionalCodebookLayer(nn.Module):
             codebook.initialize()
 
     def partial_fit_codebook(self):
-        """Partially fit the codebook using kmeans."""
+        """Apply kmeans fit on codebook using the current data."""
         for codebook in self.codebook:
             codebook.partial_fit_codebook()
 
@@ -873,7 +953,6 @@ class GroupedCodebookLayer(nn.Module):
         """Create the compositional codebook layer.
 
         Args:
-        ----
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             key: key to identify the codebook in hook caches.ff
@@ -965,7 +1044,6 @@ class GroupedCodebookLayer(nn.Module):
         """Snaps activations to elements in the codebook.
 
         Args:
-        ----
             x: input tensor of shape: (batch_size, seq_len, dim).
 
         Returns: output with the feature vectors replaced using the compositional codebook.
@@ -1017,7 +1095,7 @@ class GroupedCodebookLayer(nn.Module):
             codebook.initialize()
 
     def partial_fit_codebook(self):
-        """Partially fit the codebook using kmeans."""
+        """Apply kmeans fit on codebook using the current data."""
         for codebook in self.codebook:
             codebook.partial_fit_codebook()
 
@@ -1047,7 +1125,6 @@ class VQCodebookLayer(nn.Module):
         """Create the vqtorch codebook layer.
 
         Args:
-        ----
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             key: key to identify the codebook in hook caches.
@@ -1123,7 +1200,6 @@ class VQCodebookLayer(nn.Module):
         """Snaps activations to elements in the codebook.
 
         Args:
-        ----
             x: input tensor of shape: (batch_size, seq_len, dim).
 
         Returns: output with the feature vectors replaced using the codebook.
@@ -1170,7 +1246,6 @@ class VQCodebookLayer(nn.Module):
         """Set the hook function.
 
         Args:
-        ----
             hook_fn: hook function to use.
         """
         self.hook_fn = hook_fn
@@ -1224,7 +1299,6 @@ class CompositionalVQCodebookLayer(nn.Module):
         """Create the vqtorch codebook layer.
 
         Args:
-        ----
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             num_codebooks: number of codebooks to use. Defaults to 1.
@@ -1306,7 +1380,6 @@ class CompositionalVQCodebookLayer(nn.Module):
         """Snaps activations to elements in the codebook.
 
         Args:
-        ----
             x: input tensor of shape: (batch_size, seq_len, dim).
 
         Returns: output with the feature vectors replaced using the codebook.
@@ -1353,7 +1426,6 @@ class CompositionalVQCodebookLayer(nn.Module):
         """Set the hook function.
 
         Args:
-        ----
             hook_fn: hook function to use.
         """
         self.hook_fn = hook_fn
@@ -1402,7 +1474,6 @@ class CodebookWrapper(nn.Module, abc.ABC):
         """Create the transformer layer wrapped with the codebook.
 
         Args:
-        ----
             module_layer: module layer to wrap codebook on.
             codebook_cls: codebook class to use. Can be either `CodebookLayer` (default),
                 `CompositionalCodebookLayer` or `GroupedCodebookLayer`.
@@ -1472,7 +1543,6 @@ class TransformerLayerWrapper(CodebookWrapper):
         """Create the transformer layer wrapped with the codebook.
 
         Args:
-        ----
             module_layer: module layer to wrap codebook on.
             codebook_cls: codebook class to use. Can be either `CodebookLayer` (default),
                 `CompositionalCodebookLayer` or `GroupedCodebookLayer`.
@@ -1541,7 +1611,6 @@ class MLPWrapper(CodebookWrapper):
         """Create the MLP layer wrapped with the codebook.
 
         Args:
-        ----
             module_layer: module layer to wrap codebook on.
             codebook_cls: codebook class to use. Can be either `CodebookLayer` (default),
                 `CompositionalCodebookLayer` or `GroupedCodebookLayer`.
@@ -1606,7 +1675,6 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         """Create the config for the codebook model.
 
         Args:
-        ----
             codebook_type: type of codebook to use. Can be either 'vanilla' (default, uses `CodebookLayer`),
                 'compositional', 'grouped', or 'vqtorch'.
             num_codes: number of codebook features to have.
@@ -1680,7 +1748,6 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         """Build the codebook based model.
 
         Args:
-        ----
             config: config for the model.
             model: torch model to apply codebooks to.
         """
@@ -1712,6 +1779,22 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         raise RuntimeError(
             "This shouldn't get executed as forward is overridden in init."
         )
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        """Create a codebook model from pretrained model."""
+        model = super().from_pretrained(*args, **kwargs)
+        for codebooks in model.all_codebooks.values():
+            for codebook in codebooks:
+                codebook.normalize_L2()
+        return model
+
+    def use_faiss(self):
+        """Use faiss for code search."""
+        assert faiss is not None, "faiss is not installed."
+        for codebooks in self.all_codebooks.values():
+            for codebook in codebooks:
+                codebook.use_faiss()
 
     def init_codebook_classes(self):
         """Initialize the codebook classes based on the `codebook_type` configuration."""
@@ -2127,7 +2210,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.enable_codebooks()
 
     def partial_fit_codebook(self):
-        """Fits the codebook to the data stored in the codebook layer."""
+        """Fit the codebook to the data stored in the codebook layer."""
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
                 codebook.partial_fit_codebook()
@@ -2214,7 +2297,6 @@ class GPT2CodebookModel(CodebookModel):
         """Build the codebook based model.
 
         Args:
-        ----
             config: config for the model.
             model: GPT2 model to apply codebooks to.
 
@@ -2299,7 +2381,6 @@ class GPTNeoXCodebookModel(CodebookModel):
         """Build the codebook based model.
 
         Args:
-        ----
             config: config for the model.
             model: GPTNeoX model to apply codebooks to.
         """
@@ -2380,7 +2461,6 @@ class GPTNeoCodebookModel(CodebookModel):
         """Build the codebook based model.
 
         Args:
-        ----
             config: config for the model.
             model: GPTNeo model to apply codebooks to.
         """
@@ -2457,7 +2537,6 @@ class HookedTransformerCodebookModel(CodebookModel):
         """Build the codebook based model.
 
         Args:
-        ----
             config: config for the codebook model.
             model: HookedTransformer model to apply codebooks to.
             base_model_config: config for the base model on which HookedTransformer is applied.
