@@ -6,12 +6,10 @@ from functools import partial
 from typing import Optional
 
 import numpy as np
-import plotly.express as px
 import torch
 import torch.nn.functional as F
 from termcolor import colored
 from tqdm import tqdm
-from transformer_lens import utils as tl_utils
 
 
 @dataclass
@@ -77,32 +75,6 @@ class CodeInfo:
             repr += f", num_acts={self.num_acts}"
         repr += ")"
         return repr
-
-
-def imshow(tensor, renderer=None, xaxis="", yaxis="", **kwargs):
-    """Show an image."""
-    px.imshow(
-        tl_utils.to_numpy(tensor),
-        color_continuous_scale="RdBu",
-        labels={"x": xaxis, "y": yaxis},
-        **kwargs,
-    ).show(renderer)
-
-
-def line(tensor, renderer=None, xaxis="", yaxis="", **kwargs):
-    """Show a line plot."""
-    px.line(tl_utils.to_numpy(tensor), labels={"x": xaxis, "y": yaxis}, **kwargs).show(
-        renderer
-    )
-
-
-def scatter(x, y, xaxis="", yaxis="", caxis="", renderer=None, **kwargs):
-    """Show a scatter plot."""
-    x = tl_utils.to_numpy(x)
-    y = tl_utils.to_numpy(y)
-    px.scatter(
-        y=y, x=x, labels={"x": xaxis, "y": yaxis, "color": caxis}, **kwargs
-    ).show(renderer)
 
 
 def logits_to_pred(logits, tokenizer, k=5):
@@ -180,39 +152,42 @@ def features_to_tokens(cb_key, cb_acts, num_codes, code=None):
     return features_tokens
 
 
-def color_str(s: str, color: str, html: bool):
+def color_str(s: str, html: bool, color: Optional[str] = None):
     """Color the string for html or terminal."""
+
     if html:
+        color = "DeepSkyBlue" if color is None else color
         return f"<span style='color:{color}'>{s}</span>"
     else:
+        color = "light_cyan" if color is None else color
         return colored(s, color)
 
 
-def color_tokens_red_automata(tokens, red_idx, html=False):
-    """Separate states with a dash and color red the tokens in red_idx."""
+def color_tokens_automata(tokens, color_idx, html=False):
+    """Separate states with a dash and color red the tokens in color_idx."""
     ret_string = ""
-    itr_over_red_idx = 0
+    itr_over_color_idx = 0
     tokens_enumerate = enumerate(tokens)
     if tokens[0] == "<|endoftext|>":
         next(tokens_enumerate)
-        if red_idx[0] == 0:
-            itr_over_red_idx += 1
+        if color_idx[0] == 0:
+            itr_over_color_idx += 1
     for i, c in tokens_enumerate:
         if i % 2 == 1:
             ret_string += "-"
-        if itr_over_red_idx < len(red_idx) and i == red_idx[itr_over_red_idx]:
-            ret_string += color_str(c, "red", html)
-            itr_over_red_idx += 1
+        if itr_over_color_idx < len(color_idx) and i == color_idx[itr_over_color_idx]:
+            ret_string += color_str(c, html)
+            itr_over_color_idx += 1
         else:
             ret_string += c
     return ret_string
 
 
-def color_tokens_red(tokens, red_idx, n=3, html=False):
-    """Color red the tokens in red_idx."""
+def color_tokens(tokens, color_idx, n=3, html=False):
+    """Color the tokens in color_idx."""
     ret_string = ""
     last_colored_token_idx = -1
-    for i in red_idx:
+    for i in color_idx:
         c_str = tokens[i]
         if i <= last_colored_token_idx + 2 * n + 1:
             ret_string += "".join(tokens[last_colored_token_idx + 1 : i])
@@ -222,7 +197,7 @@ def color_tokens_red(tokens, red_idx, n=3, html=False):
             )
             ret_string += " ... "
             ret_string += "".join(tokens[i - n : i])
-        ret_string += color_str(c_str, "red", html)
+        ret_string += color_str(c_str, html)
         last_colored_token_idx = i
     ret_string += "".join(
         tokens[
@@ -235,15 +210,15 @@ def color_tokens_red(tokens, red_idx, n=3, html=False):
 def prepare_example_print(
     example_id,
     example_tokens,
-    tokens_to_color_red,
+    tokens_to_color,
     html,
-    color_red_fn=color_tokens_red,
+    color_fn=color_tokens,
 ):
     """Format example to print."""
-    example_output = color_str(example_id, "green", html)
+    example_output = color_str(example_id, html, "green")
     example_output += (
         ": "
-        + color_red_fn(example_tokens, tokens_to_color_red, html=html)
+        + color_fn(example_tokens, tokens_to_color, html=html)
         + ("<br>" if html else "\n")
     )
     return example_output
@@ -252,7 +227,7 @@ def prepare_example_print(
 def tkn_print(
     ll,
     tokens,
-    separate_states,
+    is_automata=False,
     n=3,
     max_examples=100,
     randomize=False,
@@ -266,10 +241,8 @@ def tkn_print(
     print_output = [] if return_example_list else ""
     curr_ex = ll[0][0]
     total_examples = 0
-    tokens_to_color_red = []
-    color_red_fn = (
-        color_tokens_red_automata if separate_states else partial(color_tokens_red, n=n)
-    )
+    tokens_to_color = []
+    color_fn = color_tokens_automata if is_automata else partial(color_tokens, n=n)
     for idx in indices:
         if total_examples > max_examples:
             break
@@ -279,31 +252,31 @@ def tkn_print(
             curr_ex_output = prepare_example_print(
                 curr_ex,
                 tokens[curr_ex],
-                tokens_to_color_red,
+                tokens_to_color,
                 html,
-                color_red_fn,
+                color_fn,
             )
             total_examples += 1
             if return_example_list:
-                print_output.append((curr_ex_output, len(tokens_to_color_red)))
+                print_output.append((curr_ex_output, len(tokens_to_color)))
             else:
                 print_output += curr_ex_output
             curr_ex = i
-            tokens_to_color_red = []
-        tokens_to_color_red.append(j)
+            tokens_to_color = []
+        tokens_to_color.append(j)
     curr_ex_output = prepare_example_print(
         curr_ex,
         tokens[curr_ex],
-        tokens_to_color_red,
+        tokens_to_color,
         html,
-        color_red_fn,
+        color_fn,
     )
     if return_example_list:
-        print_output.append((curr_ex_output, len(tokens_to_color_red)))
+        print_output.append((curr_ex_output, len(tokens_to_color)))
     else:
         print_output += curr_ex_output
         asterisk_str = "********************************************"
-        print_output += color_str(asterisk_str, "green", html)
+        print_output += color_str(asterisk_str, html, "green")
     total_examples += 1
 
     return print_output
@@ -312,7 +285,7 @@ def tkn_print(
 def print_ft_tkns(
     ft_tkns,
     tokens,
-    separate_states=False,
+    is_automata=False,
     n=3,
     start=0,
     stop=1000,
@@ -338,7 +311,7 @@ def print_ft_tkns(
             tkn_acts = tkn_print(
                 tkns,
                 tokens,
-                separate_states,
+                is_automata,
                 n=n,
                 max_examples=max_examples,
                 randomize=randomize,
@@ -415,23 +388,21 @@ def cb_layer_name_to_info(layer_name):
     return cb_at, layer_idx, head_idx
 
 
-def get_hooks(code, cb_at, layer_idx, head_idx=None, pos=None):
-    """Get the hooks for the codebook features."""
-    hook_fns = [
-        partial(patch_in_codes, pos=pos, code=code[i]) for i in range(len(code))
-    ]
-    return [
-        (get_cb_layer_name(cb_at[i], layer_idx[i], head_idx[i]), hook_fns[i])
-        for i in range(len(code))
-    ]
-
-
 def run_with_codes(
-    input, cb_model, code, cb_at, layer_idx, head_idx=None, pos=None, prepend_bos=True
+    input,
+    cb_model,
+    code,
+    cb_at,
+    layer_idx,
+    head_idx=None,
+    pos=None,
+    code_pos=None,
+    prepend_bos=True,
 ):
     """Run the model with the codebook features patched in."""
     hook_fns = [
-        partial(patch_in_codes, pos=pos, code=code[i]) for i in range(len(code))
+        partial(patch_in_codes, pos=pos, code=code[i], code_pos=code_pos)
+        for i in range(len(code))
     ]
     cb_model.reset_codebook_metrics()
     cb_model.reset_hook_kwargs()
@@ -476,7 +447,7 @@ def generate_with_codes(
     if generate_kwargs is None:
         generate_kwargs = {}
     hook_fns = [
-        partial(patch_in_codes, pos=tupl.pos, code=tupl.code)
+        partial(patch_in_codes, pos=tupl.pos, code=tupl.code, code_pos=tupl.code_pos)
         for tupl in list_of_code_infos
     ]
     fwd_hooks = [

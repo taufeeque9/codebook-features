@@ -7,23 +7,27 @@ from typing import Optional
 
 import numpy as np
 import torch
+from codebook_features import utils
 from tqdm import tqdm
 
-from codebook_features import utils
 
-
-def load_code_search_cache(cache_base_path):
-    """Load cache files required for code search from `cache_path`."""
+def load_dataset_cache(cache_base_path):
+    """Load cache files required for dataset from `cache_base_path`."""
     tokens_str = np.load(cache_base_path + "tokens_str.npy")
     tokens_text = np.load(cache_base_path + "tokens_text.npy")
     token_byte_pos = np.load(cache_base_path + "token_byte_pos.npy")
+    return tokens_str, tokens_text, token_byte_pos
+
+
+def load_code_search_cache(cache_base_path):
+    """Load cache files required for code search from `cache_base_path`."""
     metrics = np.load(cache_base_path + "metrics.npy", allow_pickle=True).item()
     with open(cache_base_path + "cb_acts.pkl", "rb") as f:
         cb_acts = pickle.load(f)
     with open(cache_base_path + "act_count_ft_tkns.pkl", "rb") as f:
         act_count_ft_tkns = pickle.load(f)
 
-    return tokens_str, tokens_text, token_byte_pos, cb_acts, act_count_ft_tkns, metrics
+    return cb_acts, act_count_ft_tkns, metrics
 
 
 def search_re(re_pattern, tokens_text):

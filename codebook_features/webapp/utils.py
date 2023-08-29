@@ -1,10 +1,10 @@
 """Utility functions for running webapp using streamlit."""
 
 
+import numpy as np
 import streamlit as st
-from streamlit.components.v1 import html
-
 from codebook_features import code_search_utils, utils
+from streamlit.components.v1 import html
 
 _PERSIST_STATE_KEY = f"{__name__}_PERSIST"
 TOTAL_SAVE_BUTTONS = 0
@@ -33,20 +33,28 @@ def load_widget_state():
 
 
 @st.cache_resource
-def load_code_search_cache(cache_base_path):
-    """Load cache files required for code search from `cache_path`."""
+def load_dataset_cache(dataset_cache_path):
+    """Load cache files required for dataset from `cache_path`."""
+    return code_search_utils.load_dataset_cache(dataset_cache_path)
+
+
+@st.cache_resource
+def load_code_search_cache(codes_cache_path, dataset_cache_path):
+    """Load cache files required for code search from `codes_cache_path`."""
     (
         tokens_str,
         tokens_text,
         token_byte_pos,
+    ) = load_dataset_cache(dataset_cache_path)
+    (
         cb_acts,
         act_count_ft_tkns,
         metrics,
-    ) = code_search_utils.load_code_search_cache(cache_base_path)
+    ) = code_search_utils.load_code_search_cache(codes_cache_path)
     return tokens_str, tokens_text, token_byte_pos, cb_acts, act_count_ft_tkns, metrics
 
 
-@st.cache_data(max_entries=20)
+@st.cache_data(max_entries=100)
 def load_ft_tkns(model_id, layer, head=None, code=None):
     """Load the code-to-token map for a codebook."""
     # model_id required to not mix cache_data for different models
@@ -61,7 +69,7 @@ def load_ft_tkns(model_id, layer, head=None, code=None):
     return utils.features_to_tokens(
         cb_name,
         cb_acts,
-        num_codes=10000,
+        num_codes=st.session_state["num_codes"],
         code=code,
     )
 
@@ -75,11 +83,12 @@ def get_code_acts(
     ctx_size=5,
     num_examples=100,
     return_example_list=False,
+    is_automata=False,
 ):
     """Get the token activations for a given code."""
     ft_tkns = load_ft_tkns(model_id, layer, head, code)
     ft_tkns = [ft_tkns]
-    codes, freqs, acts = utils.print_ft_tkns(
+    _, freqs, acts = utils.print_ft_tkns(
         ft_tkns,
         tokens=tokens_str,
         indices=[0],
@@ -87,6 +96,7 @@ def get_code_acts(
         n=ctx_size,
         max_examples=num_examples,
         return_example_list=return_example_list,
+        is_automata=is_automata,
     )
     return acts[0], freqs[0]
 
@@ -119,8 +129,8 @@ def set_ct_acts(code, layer, head=None, extra_args=None, is_attn=False):
             document.body.removeChild(textarea);
         }}
         myF();
-        window.location.hash = "code-token-activations";
-        console.log(window.location.hash)
+        document.location.href = "#code-token-activations";
+
     </script>
     """
     html(my_html, height=0, width=0, scrolling=False)
@@ -128,13 +138,19 @@ def set_ct_acts(code, layer, head=None, extra_args=None, is_attn=False):
 
 def find_next_code(code, layer_code_acts, act_range=None):
     """Find the next code that has activations in the given range."""
-    # code = st.session_state["ct_act_code"]
     if act_range is None:
         return code
+    min_act, max_act = 0, np.inf
+    if isinstance(act_range, tuple):
+        if len(act_range) == 2:
+            min_act, max_act = act_range
+        else:
+            min_act = act_range[0]
+    elif isinstance(act_range, int):
+        min_act = act_range
     for code_iter, code_act_count in enumerate(layer_code_acts[code:]):
-        if code_act_count >= act_range[0] and code_act_count <= act_range[1]:
+        if code_act_count >= min_act and code_act_count <= max_act:
             code += code_iter
-            # st.session_state["ct_act_code"] = code
             break
     return code
 
@@ -186,13 +202,12 @@ def add_save_code_button(
     if save_button:
         description = st.text_input(
             "Write a description for the code",
-            key="save_code_desc",
+            key=f"save_code_desc{button_key_suffix}",
         )
         if not description:
             return
 
-    description = st.session_state.get("save_code_desc", None)
-    print("description", description)
+    description = st.session_state.get(f"save_code_desc{button_key_suffix}", None)
     if description:
         layer = st.session_state["ct_act_layer"]
         is_attn = st.session_state["is_attn"]

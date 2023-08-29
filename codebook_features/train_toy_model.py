@@ -14,8 +14,13 @@ import pandas as pd
 import torch
 import transformers
 from torch.utils.data import IterableDataset
-from transformers import (GPT2Config, GPT2LMHeadModel, GPT2TokenizerFast,
-                          GPTNeoXConfig, GPTNeoXForCausalLM)
+from transformers import (
+    GPT2Config,
+    GPT2LMHeadModel,
+    GPT2TokenizerFast,
+    GPTNeoXConfig,
+    GPTNeoXForCausalLM,
+)
 
 import wandb
 from codebook_features import models, run_clm
@@ -73,7 +78,6 @@ class ToyGraph:
         """Initialize the automata.
 
         Args:
-        ----
             N: number of states in the automata.
             edges: number of edges per state.
             transition_matrix: transition matrix of probabilities of shape (N, N) describing the automata.
@@ -211,7 +215,7 @@ class ToyGraph:
 
     def seq_to_traj(self, sequences):
         """Convert a sequence of digits to a trajectory."""
-        if type(sequences) == str:
+        if isinstance(sequences, str):
             sequences = [sequences]
         trajs = []
         for seq in sequences:
@@ -355,7 +359,7 @@ def create_tokenizer(path, vocab_size):
 
 
 def load_model(config_args, cfg_dict):
-    """Loads the model based on the config."""
+    """Load the model based on the config."""
     if config_args.model_path is not None:
         model = transformers.AutoModelForCausalLM.from_pretrained(
             config_args.model_path

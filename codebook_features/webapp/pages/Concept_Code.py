@@ -2,10 +2,10 @@
 
 
 import streamlit as st
-from streamlit_extras.switch_page_button import switch_page
-
 from codebook_features import code_search_utils
 from codebook_features.webapp import utils as webapp_utils
+from streamlit.components.v1 import html
+from streamlit_extras.switch_page_button import switch_page
 
 webapp_utils.load_widget_state()
 
@@ -56,15 +56,19 @@ def get_example_concept_codes(example_id):
 
 def find_next_example(example_id):
     """Find the example after `example_id` that has concept codes."""
-    while example_id < total_examples:
+    initial_example_id = example_id
+    example_id += 1
+    while example_id != initial_example_id:
         all_codes = get_example_concept_codes(example_id)
-        codes_found = sum([len(codes) for _, (codes, _, _, _) in all_codes])
+        codes_found = sum([len(code_pr_infos) for _, code_pr_infos in all_codes])
         if codes_found > 0:
-            st.session_state["current_example_id"] = example_id
-            # st.experimental_rerun()
+            st.session_state["example_id"] = example_id
             return
-        example_id += 1
-    st.write("No more examples found.")
+        example_id = (example_id + 1) % total_examples
+    st.error(
+        f"No examples found at the specified recall threshold: {recall_threshold}.",
+        icon="🚨",
+    )
 
 
 def redirect_to_main_with_code(code, layer, head):
@@ -78,6 +82,23 @@ def redirect_to_main_with_code(code, layer, head):
 
 def show_examples_for_concept_code(code, layer, head, code_act_ratio=0.3):
     """Show examples that the code activates on."""
+    info_txt = f"Code: {code}, Layer: {layer}, Head: {head}, Occ Freq: {code_act_ratio}"
+    my_html = f"""
+    <script>
+        async function myF() {{
+            await new Promise(r => setTimeout(r, 100));
+            const textarea = document.createElement("textarea");
+            textarea.textContent = "{info_txt}";
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand("copy");
+            document.body.removeChild(textarea);
+        }}
+        myF();
+    </script>
+    """
+    html(my_html, height=0, width=0, scrolling=False)
+
     ex_acts, _ = webapp_utils.get_code_acts(
         model_name,
         tokens_str,
@@ -147,10 +168,13 @@ sort_by_name = sort_col.radio(
 sort_by = sort_by_options.index(sort_by_name)
 
 
-button = st.button("Find Next Example")
-if button:
-    find_next_example(st.session_state["example_id"])
-
+button = st.button(
+    "Find Next Example",
+    key="find_next_example",
+    on_click=find_next_example,
+    args=(example_id,),
+    help="Find an example which has codes above the recall threshold.",
+)
 
 st.markdown("### Example Text")
 trunc_suffix = "..." if example_truncation < len(tokens_text[example_id]) else ""
@@ -205,5 +229,3 @@ if len(all_codes) == 0:
         f"<div style='text-align:center'>No codes found at recall threshold: {recall_threshold}</div>",
         unsafe_allow_html=True,
     )
-
-st.markdown("## Concept Code Examples")

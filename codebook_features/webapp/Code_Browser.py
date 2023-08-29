@@ -25,44 +25,31 @@ dirs = glob.glob(base_cache_dir + "*/")
 model_name_options = [d.split("/")[-2].split("_")[:-2] for d in dirs]
 model_name_options = ["_".join(m) for m in model_name_options]
 model_name_options = sorted(set(model_name_options))
+def_model_idx = ["attn" in m.lower() for m in model_name_options].index(True)
 
 model_name = st.selectbox(
     "Model",
     model_name_options,
+    index=def_model_idx,
     key=webapp_utils.persist("model_name"),
 )
 
-model = model_name.split("_")[0].split("#")[0]
-model_layers = {
-    "pythia-410m-deduped": 24,
-    "pythia-70m-deduped": 6,
-    "gpt2": 12,
-    "TinyStories-1Layer-21M": 1,
-}
-model_heads = {
-    "pythia-410m-deduped": 16,
-    "pythia-70m-deduped": 8,
-    "gpt2": 12,
-    "TinyStories-1Layer-21M": 16,
-}
-ccb = model_name.split("_")[1]
-ccb = "_ccb" if ccb == "ccb" else ""
-cb_at = "_".join(model_name.split("_")[2:])
-seq_len = 512 if "tinystories" in model_name.lower() else 1024
-st.session_state["seq_len"] = seq_len
-
-cache_path = "/shared/cb_eval_acts/" + model_name + "_*"
+is_automata = "FSM" in model_name
+cache_path = base_cache_dir + f"{model_name}_*"
 dirs = glob.glob(cache_path)
 dirs.sort(key=os.path.getmtime)
 
 # session states
-is_attn = "attn" in cb_at
-num_layers = model_layers[model]
-num_heads = model_heads[model]
 cache_path = dirs[-1] + "/"
 
 model_info = code_search_utils.parse_model_info(cache_path)
 num_codes = model_info.num_codes
+num_layers = model_info.n_layers
+num_heads = model_info.n_heads
+cb_at = model_info.cb_at
+ccb = model_info.ccb
+ccb = "_ccb" if ccb else ""
+is_attn = "attn" in cb_at
 
 (
     tokens_str,
@@ -71,7 +58,8 @@ num_codes = model_info.num_codes
     cb_acts,
     act_count_ft_tkns,
     metrics,
-) = webapp_utils.load_code_search_cache(cache_path)
+) = webapp_utils.load_code_search_cache(cache_path, cache_path)
+seq_len = len(tokens_str[0])
 metric_keys = ["eval_loss", "eval_accuracy", "eval_dead_code_fraction"]
 metrics = {k: v for k, v in metrics.items() if k.split("/")[0] in metric_keys}
 
@@ -85,13 +73,22 @@ st.session_state["num_codes"] = num_codes
 st.session_state["ccb"] = ccb
 st.session_state["cb_at"] = cb_at
 st.session_state["is_attn"] = is_attn
+st.session_state["seq_len"] = seq_len
 
-st.markdown("## Metrics")
-# hide metrics by default
-if st.checkbox("Show Model Metrics"):
-    st.write(metrics)
+
+if not DEPLOY_MODE:
+    st.markdown("## Metrics")
+    # hide metrics by default
+    if st.checkbox("Show Model Metrics"):
+        st.write(metrics)
 
 st.markdown("## Demo Codes")
+demo_codes_desc = (
+    "This section contains codes that we've found to be interpretable along "
+    "with a description of the feature we think they are capturing. "
+    "Click on the 🔍 search button for a code to see the tokens that code activates on. "
+)
+st.write(demo_codes_desc)
 demo_file_path = cache_path + "demo_codes.txt"
 
 if st.checkbox("Show Demo Codes"):
@@ -121,7 +118,7 @@ if st.checkbox("Show Demo Codes"):
     if len(demo_codes) == 0:
         st.markdown(
             f"""
-            <div style="font-size: 1.3rem; color: red;">
+            <div style="font-size: 1.0rem; color: red;">
             No demo codes found in file {demo_file_path}
             </div>
             """,
@@ -193,6 +190,7 @@ sort_by = sort_by_options.index(sort_by_name)
 @st.cache_data(ttl=3600)
 def get_codebook_wise_codes_for_regex(regex_pattern, prec_threshold, ccb, model_name):
     """Get codebook wise codes for a given regex pattern."""
+    assert model_name is not None  # required for loading from correct cache data
     return code_search_utils.get_codes_from_pattern(
         regex_pattern,
         tokens_text,
@@ -206,15 +204,16 @@ def get_codebook_wise_codes_for_regex(regex_pattern, prec_threshold, ccb, model_
 
 
 if regex_pattern:
-    print(regex_pattern)
-    print("raw:", repr(regex_pattern))
     codebook_wise_codes, re_token_matches = get_codebook_wise_codes_for_regex(
         regex_pattern,
         prec_threshold,
         ccb,
         model_name,
     )
-    st.markdown(f"Found :green[{re_token_matches}] matches")
+    st.markdown(
+        f"Found <span style='color:green;'>{re_token_matches}</span> matches",
+        unsafe_allow_html=True,
+    )
     num_search_cols = 7 if is_attn else 6
     non_deploy_offset = 0
     if not DEPLOY_MODE:
@@ -296,14 +295,15 @@ if regex_pattern:
 
 st.markdown("## Code Token Activations")
 
-filter_codes = st.checkbox("Filter Codes", key="filter_codes")
+filter_codes = st.checkbox("Show filters", key="filter_codes")
 act_range, layer_code_acts = None, None
 if filter_codes:
     act_range = st.slider(
-        "Num Acts",
+        "Minimum number of activations",
         0,
         10_000,
-        (100, 10_000),
+        # (100, 10_000),
+        100,
         key="ct_act_range",
         help="Filter codes by the number of tokens they activate on.",
     )
@@ -354,6 +354,7 @@ acts, acts_count = webapp_utils.get_code_acts(
     head,
     ctx_size,
     num_examples,
+    is_automata=is_automata,
 )
 
 st.write(

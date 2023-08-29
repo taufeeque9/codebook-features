@@ -21,6 +21,11 @@ from codebook_features import mod_model_classes
 try:
     import faiss
     import faiss.contrib.torch_utils
+
+    try:
+        RES = faiss.StandardGpuResources()
+    except RuntimeError:
+        RES = None
 except ImportError:
     faiss = None
 
@@ -330,7 +335,7 @@ class FaissSnapFunction(BaseSnapFunction):
     @staticmethod
     def forward(
         ctx,
-        codebook_idx: faiss.Index,
+        codebook_idx,
         inputs: torch.Tensor,
         codebook: torch.Tensor,
         kcodes: int,
@@ -354,9 +359,8 @@ class FaissSnapFunction(BaseSnapFunction):
         logits, codebook_ids = codebook_idx.search(
             inputs.reshape(-1, inputs.shape[-1]), kcodes
         )
-        logits, codebook_ids = logits.reshape(
-            *(inputs.shape[:-1]), -1
-        ), codebook_ids.reshape(*(inputs.shape[:-1]), -1)
+        logits = logits.reshape(*(inputs.shape[:-1]), -1)
+        codebook_ids = codebook_ids.reshape(*(inputs.shape[:-1]), -1)
         if hook_kwargs["cosine"]:
             logits = logits / torch.norm(inputs, dim=-1, keepdim=True)
         if hook_kwargs["disable_codes"] or hook_kwargs["disable_topk"]:
@@ -444,7 +448,7 @@ class CodebookLayer(nn.Module):
             dim=-1,
         )
 
-    def use_faiss(self):
+    def use_faiss(self, device=None):
         """Use faiss for snap function."""
         self.snap_fn = FaissSnapFunction
         index_cls = (
@@ -453,13 +457,16 @@ class CodebookLayer(nn.Module):
             else faiss.IndexFlatL2
         )
         self.faiss_index = index_cls(self.codebook.weight.shape[-1])
-        device = self.codebook.weight.device.type
+        device = device or self.codebook.weight.device.type
         if device != "cpu":
-            res = faiss.StandardGpuResources()  # use a single GPU
-            self.faiss_index = faiss.index_cpu_to_gpu(res, 0, self.faiss_index)
+            assert RES is not None, "GPU faiss not available."
+            self.faiss_index = faiss.index_cpu_to_gpu(RES, 0, self.faiss_index)
 
-        self.normalize_L2()
-        self.faiss_index.add(self.codebook.weight.detach())
+        normalized_codebook = self.codebook.weight.detach().cpu()
+        normalized_codebook = torch.nn.functional.normalize(
+            normalized_codebook, p=2, dim=-1
+        )
+        self.faiss_index.add(normalized_codebook)
 
     @property
     def active_codes(self):
@@ -764,10 +771,10 @@ class CompositionalCodebookLayer(nn.Module):
         for codebook in self.codebook:
             codebook.normalize_L2()
 
-    def use_faiss(self):
+    def use_faiss(self, device=None):
         """Use faiss for snap function."""
         for codebook in self.codebook:
-            codebook.use_faiss()
+            codebook.use_faiss(device)
 
     def get_triggered_codes(self):
         """Return the triggered codes of the codebooks."""
@@ -1784,17 +1791,17 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def from_pretrained(cls, *args, **kwargs):
         """Create a codebook model from pretrained model."""
         model = super().from_pretrained(*args, **kwargs)
-        for codebooks in model.all_codebooks.values():
-            for codebook in codebooks:
-                codebook.normalize_L2()
+        # for codebooks in model.all_codebooks.values():
+        #     for codebook in codebooks:
+        #         codebook.normalize_L2()
         return model
 
-    def use_faiss(self):
+    def use_faiss(self, device=None):
         """Use faiss for code search."""
         assert faiss is not None, "faiss is not installed."
         for codebooks in self.all_codebooks.values():
             for codebook in codebooks:
-                codebook.use_faiss()
+                codebook.use_faiss(device)
 
     def init_codebook_classes(self):
         """Initialize the codebook classes based on the `codebook_type` configuration."""
@@ -2005,8 +2012,11 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             **self.config.codebook_kwargs,
         )
         extra_args = []
-        if self.base_model_cfg().model_type == "gpt_neo" and not isinstance(
-            self.base_model_cfg(), transformer_lens.HookedTransformerConfig
+        if (
+            not isinstance(
+                self.base_model_cfg(), transformer_lens.HookedTransformerConfig
+            )
+            and self.base_model_cfg().model_type == "gpt_neo"
         ):
             attn_key0 = self.attention_key.split(".")[0]
             extra_args = [layers[i].__getattr__(attn_key0).attention_type]
@@ -2698,7 +2708,7 @@ def convert_to_hooked_model_for_toy(
 ):
     """Wrap a hooked tranformer model with codebooks."""
     hooked_config = loading.convert_hf_model_config(model_path, config)
-    model = transformer_lens.HookedTransformer(hooked_config, **hooked_kwargs)
+    model = transformer_lens.HookedTransformer(hooked_config)
     if hooked_kwargs is None:
         hooked_kwargs = {}
     if "device" in hooked_kwargs:
