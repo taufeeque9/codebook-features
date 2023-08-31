@@ -1,5 +1,6 @@
 """Web App for the Codebook Features project."""
 
+import argparse
 import glob
 import os
 
@@ -8,8 +9,28 @@ import streamlit as st
 from codebook_features import code_search_utils
 from codebook_features.webapp import utils as webapp_utils
 
-DEPLOY_MODE = False
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--deploy",
+    default=False,
+    action="store_true",
+    help="Deploy mode.",
+)
+parser.add_argument(
+    "--cache_dir",
+    type=str,
+    default="/shared/cb_eval_acts/",
+    help="Path to directory containing cache for codebook models.",
+)
+try:
+    args = parser.parse_args()
+except SystemExit as e:
+    # This exception will be raised if --help or invalid command line arguments
+    # are used. Currently streamlit prevents the program from exiting normally
+    # so we have to do a hard exit.
+    os._exit(e.code)
 
+deploy = args.deploy
 
 webapp_utils.load_widget_state()
 
@@ -20,7 +41,7 @@ st.set_page_config(
 
 st.title("Codebook Features")
 
-base_cache_dir = "/shared/cb_eval_acts/"
+base_cache_dir = args.cache_dir
 dirs = glob.glob(base_cache_dir + "*/")
 model_name_options = [d.split("/")[-2].split("_")[:-2] for d in dirs]
 model_name_options = ["_".join(m) for m in model_name_options]
@@ -76,7 +97,7 @@ st.session_state["is_attn"] = is_attn
 st.session_state["seq_len"] = seq_len
 
 
-if not DEPLOY_MODE:
+if not deploy:
     st.markdown("## Metrics")
     # hide metrics by default
     if st.checkbox("Show Model Metrics"):
@@ -216,7 +237,7 @@ if regex_pattern:
     )
     num_search_cols = 7 if is_attn else 6
     non_deploy_offset = 0
-    if not DEPLOY_MODE:
+    if not deploy:
         non_deploy_offset = 1
         num_search_cols += non_deploy_offset
 
@@ -235,7 +256,7 @@ if regex_pattern:
         "Num Acts",
         help="Number of tokens that the code activates on in the acts dataset.",
     )
-    if not DEPLOY_MODE:
+    if not deploy:
         cols[-1].markdown(
             "Save to Demos",
             help="Button to save the code to demos along with the regex pattern.",
@@ -271,7 +292,7 @@ if regex_pattern:
         cols[-3 - non_deploy_offset].write(f"{prec*100:.2f}%")
         cols[-2 - non_deploy_offset].write(f"{rec*100:.2f}%")
         cols[-1 - non_deploy_offset].write(str(code_acts))
-        if not DEPLOY_MODE:
+        if not deploy:
             webapp_utils.add_save_code_button(
                 demo_file_path,
                 num_acts=code_acts,
@@ -362,7 +383,7 @@ st.write(
     f"Activates on {acts_count[0]} tokens on the acts dataset",
 )
 
-if not DEPLOY_MODE:
+if not deploy:
     webapp_utils.add_save_code_button(
         demo_file_path,
         acts_count[0],

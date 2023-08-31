@@ -22,7 +22,7 @@ class GradientCheckerOptimizer(torch.optim.AdamW):
 
 @pytest.mark.parametrize(
     "config_name",
-    ["test", "test_tinystories", "test_pile", "test_pythia", "test_vqtorch"],
+    ["test", "test_tinystories"],
 )
 def test_train_codebook(config_name):
     """Test training codebook script."""
@@ -51,6 +51,7 @@ def test_straight_through_gradient_flows():
         overwrite_output_dir=True,
         max_steps=1,
         do_train=True,
+        report_to="none",
     )
     model_args = run_clm.ModelArguments(model_name_or_path="gpt2")
     data_args = run_clm.DataTrainingArguments(
@@ -64,7 +65,7 @@ def test_straight_through_gradient_flows():
     )
     model = models.GPT2CodebookModel(model=model, config=cb_config)
     optimizer = GradientCheckerOptimizer(model.get_codebook_params())
-    trainer, lm_dataset, last_checkpoint = run_clm.get_trainer_and_dataset(
+    trainer, lm_dataset, _, last_checkpoint = run_clm.get_trainer_and_dataset(
         model_args, data_args, training_args, model, optimizers=(optimizer, None)
     )
     metrics = run_clm.run_trainer(

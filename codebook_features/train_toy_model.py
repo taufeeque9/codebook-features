@@ -410,13 +410,6 @@ def main(cfg):
 
     Returns: tuple of metrics for trained model and the baseline metrics.
     """
-    training_args = run_clm.TrainingArguments(**cfg.training_args)
-    training_args.local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    model_args = run_clm.ModelArguments(model_name_or_path="toy/model")
-    config_args = ModelConfigArguments(**cfg.model_config_args)
-    data_args = run_clm.DataTrainingArguments(
-        dataset_name="toy_graph", max_eval_samples=2048
-    )
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
     flat_cfg_dict = pd.json_normalize(cfg_dict, sep="@").to_dict(orient="records")[0]
     flat_cfg_dict = {k.split("@")[-1]: v for k, v in flat_cfg_dict.items()}
@@ -426,7 +419,17 @@ def main(cfg):
     for key in sorted(cfg.tag_keys):
         tags.append(f"{shortened_args[key]}: {flat_cfg_dict[key]}")
     if tags:
-        cfg_dict["training_args"]["run_name"] = training_args.run_name = ", ".join(tags)
+        cfg_dict["training_args"]["run_name"] = ", ".join(tags)
+
+    training_args = run_clm.TrainingArguments(
+        **(cfg_dict["training_args"]),
+        local_rank=int(os.environ.get("LOCAL_RANK", -1)),
+    )
+    model_args = run_clm.ModelArguments(model_name_or_path="toy/model")
+    config_args = ModelConfigArguments(**cfg.model_config_args)
+    data_args = run_clm.DataTrainingArguments(
+        dataset_name="toy_graph", max_eval_samples=2048
+    )
 
     if cfg.toy_dataset_args.path is None:
         automata = ToyGraph(
@@ -481,7 +484,18 @@ def main(cfg):
             )
             optimizers = (optimizer, None)
 
-    callbacks = [cb_trainer.WandbCallback()]
+    wandb_initilized = False
+    if training_args.local_rank <= 0 and "wandb" in training_args.report_to:
+        wandb.init(
+            project="toy_graph",
+            name=training_args.run_name,
+            tags=tags,
+            settings=wandb.Settings(code_dir="."),
+            config=cfg_dict,
+        )
+        wandb_initilized = True
+
+    callbacks = [cb_trainer.WandbCallback()] if wandb_initilized else []
 
     trainer = ToyModelTrainer(
         toy_graph=automata,
@@ -496,16 +510,6 @@ def main(cfg):
         optimizers=optimizers,
         callbacks=callbacks,
     )
-
-    if training_args.local_rank <= 0:
-        wandb.init(
-            project="toy_graph",
-            name=training_args.run_name,
-            tags=tags,
-            settings=wandb.Settings(code_dir="."),
-            config=cfg_dict,
-        )
-
     automata.save("toy")
 
     lm_datasets = {"train": train_dataset, "validation": eval_dataset}

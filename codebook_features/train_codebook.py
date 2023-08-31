@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import os
+import sys
 
 import hydra
 import omegaconf
@@ -32,20 +33,9 @@ shortened_args = {
 }
 
 
-def prepare_logging(cfg, training_args):
+def prepare_logging(cfg):
     """Prepare logging for wandb."""
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
-    # double the batch size for 80 GB GPUs (batch size is set assuming 40 GB GPUs)
-    if torch.cuda.is_available():
-        if torch.cuda.get_device_properties(0).total_memory / (2**30) > 70:
-            training_args.per_device_train_batch_size *= 2
-        elif torch.cuda.get_device_properties(0).total_memory / (2**30) > 40:
-            training_args.per_device_train_batch_size = (
-                int(training_args.per_device_train_batch_size * 1.25) + 1
-            )
-        cfg_dict["training_args"][
-            "per_device_train_batch_size"
-        ] = training_args.per_device_train_batch_size
     flat_cfg_dict = pd.json_normalize(cfg_dict, sep="@").to_dict(orient="records")[0]
     flat_cfg_dict = {k.split("@")[-1]: v for k, v in flat_cfg_dict.items()}
 
@@ -54,7 +44,7 @@ def prepare_logging(cfg, training_args):
     for key in sorted(cfg.tag_keys):
         tags.append(f"{shortened_args[key]}: {flat_cfg_dict[key]}")
     if tags:
-        cfg_dict["training_args"]["run_name"] = training_args.run_name = ", ".join(tags)
+        cfg_dict["training_args"]["run_name"] = ", ".join(tags)
 
     return cfg_dict, tags
 
@@ -125,14 +115,17 @@ def main(cfg):
 
     Returns: tuple of metrics for trained model and the baseline metrics.
     """
-    training_args = run_clm.TrainingArguments(**cfg.training_args)
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    cfg_dict, tags = prepare_logging(cfg)
+    training_args = run_clm.TrainingArguments(
+        **(cfg_dict["training_args"]),
+        local_rank=local_rank,
+    )
     model_args = run_clm.ModelArguments(**cfg.model_args)
     data_args = run_clm.DataTrainingArguments(**cfg.data_args)
-    training_args.local_rank = int(os.environ.get("LOCAL_RANK", -1))
 
-    cfg_dict, tags = prepare_logging(cfg, training_args)
-
-    if training_args.local_rank <= 0:
+    wandb_initilized = False
+    if training_args.local_rank <= 0 and "wandb" in training_args.report_to:
         wandb.init(
             project=cfg.project,
             name=training_args.run_name,
@@ -140,6 +133,7 @@ def main(cfg):
             settings=wandb.Settings(code_dir="."),
             config=cfg_dict,
         )
+        wandb_initilized = True
 
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
@@ -163,7 +157,7 @@ def main(cfg):
 
     optimizer = get_optimizer(training_args, model)
 
-    callbacks = [cb_trainer.WandbCallback()]
+    callbacks = [cb_trainer.WandbCallback()] if wandb_initilized else []
     if cfg.k_scheduler_kwargs is not None:
         k_scheduler = cb_trainer.MulticodeKScheduler(
             k_min=cfg.codebook_args.k_codebook, **cfg.k_scheduler_kwargs
@@ -184,7 +178,7 @@ def main(cfg):
 
     model.enable_codebooks()
     # compile not works on Windows currently
-    if os.name != "nt":
+    if os.name != "nt" and sys.version_info < (3, 11):
         model = torch.compile(model)
     metrics = run_clm.run_trainer(
         model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint

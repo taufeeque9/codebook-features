@@ -61,10 +61,9 @@ class CodebookTrainer(transformers.Trainer):
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: Dict[str, float]) -> None:
-        """Adds codebook model related logging.
+        """Add codebook model related logging.
 
         Args:
-        ----
             logs: log dictionary.
         """
         metric_prefix = ""
@@ -145,7 +144,7 @@ class WandbCallback(transformers.integrations.WandbCallback):
     """WandbCallback with codebook model logging."""
 
     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
-        """Adds codebook model related logging."""
+        """Add codebook model related logging."""
         metric_prefix = ""
         for k in list(logs.keys()):
             if k.startswith("train_"):
@@ -177,7 +176,7 @@ class WandbCallback(transformers.integrations.WandbCallback):
                 logs.pop(metric_prefix + f"code_weights/layer{codebook_idx}")
 
     def log_code_counts_and_weight_distribution(self, logs, model, metric_prefix):
-        """Logs the code activation plot and also the weight distribution of the most common codebook feature."""
+        """Log the code activation plot and also the weight distribution of the most common codebook feature."""
         for codebook_idx, codebooks in model.all_codebooks.items():
             counts = codebooks[0].most_common_counts()
             counts = np.stack([np.arange(counts.size), counts], axis=1)
@@ -212,23 +211,23 @@ class MultiOptimizer(torch.optim.Optimizer):
     """MultiOptimizer that wraps multiple optimizers."""
 
     def __init__(self, optimizers):
-        """Initializes the MultiOptimizer."""
+        """Build the MultiOptimizer."""
         self.optimizers = optimizers
 
     def step(self, closure=None):
-        """Performs a single optimization step."""
+        """Perform a single optimization step."""
         for optimizer in self.optimizers:
             optimizer.step(closure)
 
     def __setstate__(self, state):
-        """Sets the state of the all the optimizers."""
+        """Set the state of the all the optimizers."""
         super().__setstate__(state)
         for optimizer in self.optimizers:
             optimizer.__setstate__(state)
 
     @property
     def param_groups(self):
-        """Returns the parameter groups of all the optimizers."""
+        """Get the parameter groups of all the optimizers."""
         param_grps = []
         for optimizer in self.optimizers:
             param_grps.extend(optimizer.param_groups)
@@ -239,14 +238,14 @@ class MulticodeKScheduler(transformers.TrainerCallback):
     """K scheduler for multicode models."""
 
     def __init__(self, k_max, k_min, decay_steps, decay_power=1):
-        """Initializes the K scheduler."""
+        """Build the K scheduler."""
         self.k_max = k_max
         self.k_min = k_min
         self.decay_steps = decay_steps - 1
         self.decay_power = decay_power
 
     def k_scheduler(self, step):
-        """Returns the current K value."""
+        """Get the current K value."""
         return int(
             self.k_max
             - (self.k_max - self.k_min)
@@ -260,13 +259,13 @@ class MulticodeKScheduler(transformers.TrainerCallback):
         control: transformers.TrainerControl,
         **kwargs,
     ):
-        """Updates the K value."""
+        """Update the K value."""
         models.BaseSnapFunction.k = self.k_scheduler(state.global_step)
 
     def on_train_begin(self, *args, **kwargs):
-        """Sets the K value to the max K."""
+        """Set the K value to the max K."""
         models.BaseSnapFunction.k = self.k_max
 
     def on_train_end(self, *args, **kwargs):
-        """Sets the K value to the min K."""
+        """Set the K value to the min K."""
         models.BaseSnapFunction.k = self.k_min

@@ -20,7 +20,8 @@ training_args:
   evaluation_strategy: steps
   eval_steps: 1
   logging_steps: 1
-  # report_to: wandb
+  report_to: none
+  use_cpu: True
 
   train_model_params: True
   model_lr_factor: 0.1

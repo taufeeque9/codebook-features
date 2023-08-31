@@ -15,6 +15,7 @@ training_args:
   save_steps: 2
   ddp_find_unused_parameters: False
   report_to: none
+  use_cpu: True
 
   train_model_params: True
   model_lr_factor: 1

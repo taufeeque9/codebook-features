@@ -2,11 +2,11 @@ model_args:
   model_name_or_path: roneneldan/TinyStories-1M
 
 data_args:
-  dataset_name: wikitext
-  dataset_config_name: wikitext-2-raw-v1
+  dataset_name: roneneldan/TinyStories
+  dataset_config_name: null
   max_train_samples: 2
   max_eval_samples: 2
-  streaming: False
+  streaming: True
 training_args:
   run_name: test
   output_dir: output_test
@@ -20,7 +20,8 @@ training_args:
   evaluation_strategy: steps
   eval_steps: 1
   logging_steps: 1
-  # report_to: wandb
+  report_to: none
+  use_cpu: True
 
   train_model_params: True
   model_lr_factor: 0.1

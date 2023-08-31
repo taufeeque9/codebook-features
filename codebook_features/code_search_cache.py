@@ -18,9 +18,10 @@ parser.add_argument("--model_name", type=str, required=True)
 parser.add_argument("--pretrained_path", type=str, required=True)
 parser.add_argument("--max_samples", type=int, default=2000)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--base_dir", type=str, default="/shared/cb_eval_acts/")
+parser.add_argument("--output_base_dir", type=str, default="/shared/cb_eval_acts/")
 parser.add_argument("--regen_cache", default=False, action="store_true")
 parser.add_argument("--dataset_name", type=str, default=None)
+parser.add_argument("--dataset_config_name", type=str, default=None)
 
 
 args = parser.parse_args()
@@ -29,9 +30,10 @@ model_id = model_name_or_path.split("/")[-1]
 pretrained_path = args.pretrained_path
 max_samples = args.max_samples
 seed = args.seed
-base_dir = args.base_dir
+base_dir = args.output_base_dir
 regen_cache = args.regen_cache
 dataset_name = args.dataset_name
+dataset_config_name = args.dataset_config_name
 
 device = "cuda"
 orig_cb_model = models.wrap_codebook(
@@ -92,19 +94,12 @@ if not dataset_name:
             streaming=False,
         )
 else:  # used when tinystories is trained on wikitext for example
-    if "wiki" in dataset_name:
-        data_args = run_clm.DataTrainingArguments(
-            dataset_name="wikitext",
-            dataset_config_name="wikitext-103-v1",
-            streaming=False,
-        )
-    elif "tiny" in dataset_name.lower():
-        data_args = run_clm.DataTrainingArguments(
-            dataset_name="roneneldan/TinyStories",
-            dataset_config_name=None,
-            streaming=False,
-            block_size=512,
-        )
+    assert dataset_config_name is not None
+    data_args = run_clm.DataTrainingArguments(
+        dataset_name=dataset_name,
+        dataset_config_name=dataset_config_name,
+        streaming=False,
+    )
 
 trainer, lm_datasets, raw_datasets, last_checkpoint = run_clm.get_trainer_and_dataset(
     model_args,
