@@ -29,7 +29,7 @@ training_args:
   codebook_weight_decay: 0.01
 
 codebook_args:
-  codebook_type: compositional
+  codebook_type: group
   num_codes: 100
   num_codebooks: -1
   layers_to_snap: [0]
@@ -52,7 +52,7 @@ k_scheduler_kwargs: null
   # k_max: 100
   # decay_steps: 2
 
-disable_logging: False
+enable_logging: False
 pretrained_path: null
 get_baseline: False
 tag_keys: [num_codes,loss,codebook_type]
