@@ -16,10 +16,6 @@ repos:
   hooks:
   - id: black
   - id: black-jupyter
-- repo: https://github.com/PyCQA/isort
-  rev: 5.12.0
-  hooks:
-  - id: isort
 # Python static analysis
 - repo: https://github.com/charliermarsh/ruff-pre-commit
   # Ruff version.
