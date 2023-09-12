@@ -1,0 +1,63 @@
+model_args:
+  model_name_or_path: EleutherAI/pythia-70m-deduped
+  cache_dir: /data/.cache/huggingface
+data_args:
+  dataset_name: wikitext
+  dataset_config_name: wikitext-103-v1
+  streaming: False
+training_args:
+  run_name: train_gpt2_on_wiki
+  output_dir: output_main
+  overwrite_output_dir: True
+  do_train: True
+  do_eval: True
+  per_device_train_batch_size: 24
+  per_device_eval_batch_size: 8
+  learning_rate: 5e-4
+  warmup_ratio: 0.0
+  lr_scheduler_type: constant
+  max_steps: 15000
+  logging_first_step: True
+  logging_steps: 50
+  evaluation_strategy: steps
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 2
+  load_best_model_at_end: True
+  ddp_find_unused_parameters: False
+  tf32: True
+  dataloader_num_workers: 4
+
+  train_model_params: True
+  model_lr_factor: 1
+  codebook_reg_p: null
+  codebook_weight_decay: 0.01
+
+codebook_args:
+  codebook_type: compositional
+  num_codes: 10000
+  num_codebooks: -1
+  layers_to_snap: all
+  similarity_metric: inner_product
+  codebook_at: preproj_attention
+  loss: aeloss
+  k_codebook: 8
+  kmeans_init: False
+  kmeans_path: /.cache/cb_volume/huggingface/kmeans_embeddings.pt
+  kmeans_init_examples: 1000
+  kmeans_kwargs:
+    n_init: auto
+    batch_size: 24576
+  codebook_kwargs: null
+  replace_codes: False
+
+k_scheduler_kwargs: null
+#   k_max: 10000
+#   decay_steps: 5000
+
+disable_logging: False
+pretrained_path: null
+get_baseline: False
+tag_keys: []
+tags: []
+project: gpt2-codebook

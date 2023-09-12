@@ -49,4 +49,4 @@ repos:
     -   id: mypy
         args: [--follow-imports=skip]
 
-exclude: (mod_model_classes.py|tl_mods.py)
+exclude: (mod_model_classes.py|tl_mods.py|run_clm.py)

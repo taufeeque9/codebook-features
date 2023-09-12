@@ -22,7 +22,7 @@ try:
 
     try:
         RES = faiss.StandardGpuResources()
-    except RuntimeError:
+    except (RuntimeError, AttributeError):
         RES = None
 except ImportError:
     faiss = None
@@ -1204,8 +1204,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         per_layer_codebooks = len(self.codebook_at)
 
         for key in ["codebook_type", "num_codebooks", "k_codebook", "num_codes"]:
-            # check if the argument is a sequence
-            if isinstance(getattr(self, key), Sequence):
+            if isinstance(getattr(self, key), Union[list, tuple]):
                 if len(getattr(self, key)) != per_layer_codebooks:
                     raise ValueError(
                         f"length of {key} must match length of `codebook_at`."
@@ -1230,6 +1229,9 @@ class CodebookModelConfig(transformers.PretrainedConfig):
             raise ValueError(f"Invalid similarity metric {self.similarity_metric}")
         if self.codebook_kwargs is None:
             self.codebook_kwargs = {}
+        self.replace_codes = False
+        if self.codebook_kwargs.get("replace_after_steps", 0) > 0:
+            self.replace_codes = True
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):
@@ -1384,7 +1386,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             layers[i],
             codebook_cls=self.codebook_cls[i_cb],
             dim=self.d_model,
-            num_codes=self.config.num_codes,
+            num_codes=self.config.num_codes[i_cb],
             key=f"layer{i}_tb",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks[i_cb],
@@ -1404,7 +1406,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             layers[i].__getattr__(self.mlp_key),
             codebook_cls=self.codebook_cls[i_cb],
             dim=self.d_model,
-            num_codes=self.config.num_codes,
+            num_codes=self.config.num_codes[i_cb],
             key=f"layer{i}_mlp",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks[i_cb],
@@ -1426,7 +1428,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             mlp.__getattr__(self.mlp_mid_key),
             codebook_cls=self.codebook_cls[i_cb],
             dim=self.itermediate_size(),
-            num_codes=self.config.num_codes,
+            num_codes=self.config.num_codes[i_cb],
             key=f"layer{i}_mlp_mid",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks[i_cb],
@@ -1449,7 +1451,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             qkv,
             codebook_cls=GroupCodebookLayer,
             dim=3 * self.d_model,
-            num_codes=self.config.num_codes,
+            num_codes=self.config.num_codes[i_cb],
             key=f"layer{i}_qkv",
             snap_fn=self.snap_fn,
             num_codebooks=3 * self.config.num_codebooks[i_cb],
@@ -1470,7 +1472,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             layers[i].__getattr__(self.attention_key),
             codebook_cls=self.codebook_cls[i_cb],
             dim=self.d_model,
-            num_codes=self.config.num_codes,
+            num_codes=self.config.num_codes[i_cb],
             key=f"layer{i}_attn",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks[i_cb],
@@ -1489,7 +1491,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         """Add codebook at the attention layer before the output is projected to the residual stream."""
         codebook = self.codebook_cls[i_cb](
             dim=self.d_model,
-            num_codes=self.config.num_codes,
+            num_codes=self.config.num_codes[i_cb],
             key=f"layer{i}_attn_preproj",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks[i_cb],
@@ -1536,7 +1538,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         """Add codebook on the summed output of attention and MLP layers."""
         codebook = self.codebook_cls[i_cb](
             dim=self.d_model,
-            num_codes=self.config.num_codes,
+            num_codes=self.config.num_codes[i_cb],
             key=f"layer{i}_attn+mlp",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks[i_cb],
