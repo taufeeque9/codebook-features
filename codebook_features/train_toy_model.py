@@ -395,8 +395,8 @@ def load_model(config_args, cfg_dict):
     if cfg_dict["apply_codebook"]:
         cb_config = models.CodebookModelConfig(**cfg_dict["codebook_args"])
         model = models.wrap_codebook(model_or_path=model, config=cb_config)
-        if not cb_config.codebook_kwargs["replace_after_steps"]:
-            model.disable_logging()
+        if cfg_dict["enable_logging"]:
+            model.enable_logging()
 
     return model
 

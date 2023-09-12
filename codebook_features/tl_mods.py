@@ -1,7 +1,7 @@
 """Modifications to functions from the transformer_lens library."""
 
 import transformer_lens
-from transformer_lens import get_official_model_name
+from transformer_lens.loading_from_pretrained import get_official_model_name
 from transformers import AutoConfig
 
 # Taken from the commit:

@@ -56,7 +56,7 @@ cb_at_dict = {
 cb_at = orig_cb_model.config.codebook_at[0]
 cb_at = cb_at_dict.get(cb_at, cb_at)
 is_attn = "attn" in cb_at
-ccb = orig_cb_model.config.codebook_type[0] == "compositional"
+ccb = orig_cb_model.config.codebook_type[0] == "group"
 n_layers = orig_cb_model.num_layers()
 n_heads = orig_cb_model.config.num_codebooks[0] if is_attn else None
 num_codes = orig_cb_model.config.num_codes

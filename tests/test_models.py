@@ -55,11 +55,11 @@ def test_codebook_layer():
 
 @pytest.mark.parametrize(
     "codebook_cls",
-    [models.CompositionalCodebookLayer, models.GroupedCodebookLayer],
+    [models.GroupCodebookLayer],
 )
 @pytest.mark.parametrize("num_codebooks", [1, 8])
 def test_composition_codebook_layer(codebook_cls, num_codebooks):
-    """Test CompositionalCodebookLayer."""
+    """Test GroupCodebookLayer."""
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     dim, num_codes, bs, seq_len = 32, 128, 2, 10
     layer = codebook_cls(
@@ -119,7 +119,7 @@ def test_hooked_transformer_codebook_model(codebook_at):
     config = models.CodebookModelConfig(
         layers_to_snap="all",
         codebook_at=codebook_at,
-        codebook_type="compositional",
+        codebook_type="group",
         num_codebooks=-1,
     )
     model_path = "EleutherAI/pythia-70m-deduped"

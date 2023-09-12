@@ -183,135 +183,136 @@ if st.checkbox("Show Demo Codes"):
 
 st.markdown("## Code Search")
 
-regex_pattern = st.text_input(
-    "Enter a regex pattern",
-    help="Wrap code token in the first group. E.g. New (York)",
-    key="regex_pattern",
-)
-# topk = st.slider("Top K", 1, 20, 10)
-prec_col, sort_col = st.columns(2)
-prec_threshold = prec_col.slider(
-    "Precision Threshold",
-    0.0,
-    1.0,
-    0.9,
-    help="Shows codes with precision on the regex pattern above the threshold.",
-)
-sort_by_options = ["Precision", "Recall", "Num Acts"]
-sort_by_name = sort_col.radio(
-    "Sort By",
-    sort_by_options,
-    index=0,
-    horizontal=True,
-    help="Sorts the codes by the selected metric.",
-)
-sort_by = sort_by_options.index(sort_by_name)
-
-
-@st.cache_data(ttl=3600)
-def get_codebook_wise_codes_for_regex(regex_pattern, prec_threshold, ccb, model_name):
-    """Get codebook wise codes for a given regex pattern."""
-    assert model_name is not None  # required for loading from correct cache data
-    return code_search_utils.get_codes_from_pattern(
-        regex_pattern,
-        tokens_text,
-        token_byte_pos,
-        cb_acts,
-        act_count_ft_tkns,
-        ccb=ccb,
-        topk=8,
-        prec_threshold=prec_threshold,
+if st.checkbox("Search with Regex"):
+    regex_pattern = st.text_input(
+        "Enter a regex pattern",
+        help="Wrap code token in the first group. E.g. New (York)",
+        key="regex_pattern",
     )
-
-
-if regex_pattern:
-    codebook_wise_codes, re_token_matches = get_codebook_wise_codes_for_regex(
-        regex_pattern,
-        prec_threshold,
-        ccb,
-        model_name,
+    # topk = st.slider("Top K", 1, 20, 10)
+    prec_col, sort_col = st.columns(2)
+    prec_threshold = prec_col.slider(
+        "Precision Threshold",
+        0.0,
+        1.0,
+        0.9,
+        help="Shows codes with precision on the regex pattern above the threshold.",
     )
-    st.markdown(
-        f"Found <span style='color:green;'>{re_token_matches}</span> matches",
-        unsafe_allow_html=True,
+    sort_by_options = ["Precision", "Recall", "Num Acts"]
+    sort_by_name = sort_col.radio(
+        "Sort By",
+        sort_by_options,
+        index=0,
+        horizontal=True,
+        help="Sorts the codes by the selected metric.",
     )
-    num_search_cols = 7 if is_attn else 6
-    non_deploy_offset = 0
-    if not deploy:
-        non_deploy_offset = 1
-        num_search_cols += non_deploy_offset
+    sort_by = sort_by_options.index(sort_by_name)
 
-    cols = st.columns(num_search_cols)
-
-    # st.markdown(button_height_style, unsafe_allow_html=True)
-
-    cols[0].markdown("Search", help="Button to see token activations for the code.")
-    cols[1].write("Layer")
-    if is_attn:
-        cols[2].write("Head")
-    cols[-4 - non_deploy_offset].write("Code")
-    cols[-3 - non_deploy_offset].write("Precision")
-    cols[-2 - non_deploy_offset].write("Recall")
-    cols[-1 - non_deploy_offset].markdown(
-        "Num Acts",
-        help="Number of tokens that the code activates on in the acts dataset.",
-    )
-    if not deploy:
-        cols[-1].markdown(
-            "Save to Demos",
-            help="Button to save the code to demos along with the regex pattern.",
+    @st.cache_data(ttl=3600)
+    def get_codebook_wise_codes_for_regex(
+        regex_pattern, prec_threshold, ccb, model_name
+    ):
+        """Get codebook wise codes for a given regex pattern."""
+        assert model_name is not None  # required for loading from correct cache data
+        return code_search_utils.get_codes_from_pattern(
+            regex_pattern,
+            tokens_text,
+            token_byte_pos,
+            cb_acts,
+            act_count_ft_tkns,
+            ccb=ccb,
+            topk=8,
+            prec_threshold=prec_threshold,
         )
-    all_codes = codebook_wise_codes.items()
-    all_codes = [
-        (cb_name, code_pr_info)
-        for cb_name, code_pr_infos in all_codes
-        for code_pr_info in code_pr_infos
-    ]
-    all_codes = sorted(all_codes, key=lambda x: x[1][1 + sort_by], reverse=True)
-    for cb_name, (code, prec, rec, code_acts) in all_codes:
-        layer_head = cb_name.split("_")
-        layer = layer_head[0][5:]
-        head = layer_head[1][4:] if len(layer_head) > 1 else None
-        button_key = f"search_code{code}_layer{layer}" + (
-            f"head{head}" if head is not None else ""
-        )
-        cols = st.columns(num_search_cols)
-        extra_args = {
-            "prec": prec,
-            "recall": rec,
-            "num_acts": code_acts,
-            "regex": regex_pattern,
-        }
-        button_clicked = cols[0].button("🔍", key=button_key)
-        if button_clicked:
-            webapp_utils.set_ct_acts(code, layer, head, extra_args, is_attn)
-        cols[1].write(layer)
-        if is_attn:
-            cols[2].write(head)
-        cols[-4 - non_deploy_offset].write(code)
-        cols[-3 - non_deploy_offset].write(f"{prec*100:.2f}%")
-        cols[-2 - non_deploy_offset].write(f"{rec*100:.2f}%")
-        cols[-1 - non_deploy_offset].write(str(code_acts))
-        if not deploy:
-            webapp_utils.add_save_code_button(
-                demo_file_path,
-                num_acts=code_acts,
-                save_regex=True,
-                prec=prec,
-                recall=rec,
-                button_st_container=cols[-1],
-                button_key_suffix=f"_code{code}_layer{layer}_head{head}",
-            )
 
-    if len(all_codes) == 0:
+    if regex_pattern:
+        codebook_wise_codes, re_token_matches = get_codebook_wise_codes_for_regex(
+            regex_pattern,
+            prec_threshold,
+            ccb,
+            model_name,
+        )
         st.markdown(
-            f"""
-            <div style="font-size: 1.0rem; color: red;">
-            No codes found for pattern {regex_pattern} at precision threshold: {prec_threshold}
-            </div>
-            """,
+            f"Found <span style='color:green;'>{re_token_matches}</span> matches",
             unsafe_allow_html=True,
         )
+        num_search_cols = 7 if is_attn else 6
+        non_deploy_offset = 0
+        if not deploy:
+            non_deploy_offset = 1
+            num_search_cols += non_deploy_offset
+
+        cols = st.columns(num_search_cols)
+
+        # st.markdown(button_height_style, unsafe_allow_html=True)
+
+        cols[0].markdown("Search", help="Button to see token activations for the code.")
+        cols[1].write("Layer")
+        if is_attn:
+            cols[2].write("Head")
+        cols[-4 - non_deploy_offset].write("Code")
+        cols[-3 - non_deploy_offset].write("Precision")
+        cols[-2 - non_deploy_offset].write("Recall")
+        cols[-1 - non_deploy_offset].markdown(
+            "Num Acts",
+            help="Number of tokens that the code activates on in the acts dataset.",
+        )
+        if not deploy:
+            cols[-1].markdown(
+                "Save to Demos",
+                help="Button to save the code to demos along with the regex pattern.",
+            )
+        all_codes = codebook_wise_codes.items()
+        all_codes = [
+            (cb_name, code_pr_info)
+            for cb_name, code_pr_infos in all_codes
+            for code_pr_info in code_pr_infos
+        ]
+        all_codes = sorted(all_codes, key=lambda x: x[1][1 + sort_by], reverse=True)
+        for cb_name, (code, prec, rec, code_acts) in all_codes:
+            layer_head = cb_name.split("_")
+            layer = layer_head[0][5:]
+            head = layer_head[1][4:] if len(layer_head) > 1 else None
+            button_key = f"search_code{code}_layer{layer}" + (
+                f"head{head}" if head is not None else ""
+            )
+            cols = st.columns(num_search_cols)
+            extra_args = {
+                "prec": prec,
+                "recall": rec,
+                "num_acts": code_acts,
+                "regex": regex_pattern,
+            }
+            button_clicked = cols[0].button("🔍", key=button_key)
+            if button_clicked:
+                webapp_utils.set_ct_acts(code, layer, head, extra_args, is_attn)
+            cols[1].write(layer)
+            if is_attn:
+                cols[2].write(head)
+            cols[-4 - non_deploy_offset].write(code)
+            cols[-3 - non_deploy_offset].write(f"{prec*100:.2f}%")
+            cols[-2 - non_deploy_offset].write(f"{rec*100:.2f}%")
+            cols[-1 - non_deploy_offset].write(str(code_acts))
+            if not deploy:
+                webapp_utils.add_save_code_button(
+                    demo_file_path,
+                    num_acts=code_acts,
+                    save_regex=True,
+                    prec=prec,
+                    recall=rec,
+                    button_st_container=cols[-1],
+                    button_key_suffix=f"_code{code}_layer{layer}_head{head}",
+                )
+
+        if len(all_codes) == 0:
+            st.markdown(
+                f"""
+                <div style="font-size: 1.0rem; color: red;">
+                No codes found for pattern {regex_pattern} at precision threshold: {prec_threshold}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 
 st.markdown("## Code Token Activations")
@@ -362,7 +363,7 @@ num_examples = cols[-2].number_input(
 ctx_size = cols[-1].number_input(
     "Context Size",
     1,
-    10,
+    30,
     5,
     help="Number of tokens to show before and after the code token.",
 )

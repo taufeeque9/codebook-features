@@ -2,10 +2,11 @@
 
 
 import streamlit as st
-from codebook_features import code_search_utils
-from codebook_features.webapp import utils as webapp_utils
 from streamlit.components.v1 import html
 from streamlit_extras.switch_page_button import switch_page
+
+from codebook_features import code_search_utils
+from codebook_features.webapp import utils as webapp_utils
 
 webapp_utils.load_widget_state()
 
@@ -155,7 +156,7 @@ recall_threshold = r_col.slider(
     help="Recall Threshold is the minimum fraction of tokens in the example that the code must activate on.",
 )
 example_truncation = trunc_col.number_input(
-    "Max Output Chars", 0, 10240, 1024, key="max_chars"
+    "Max Output Chars", 0, 102400, 1024, key="max_chars"
 )
 sort_by_options = ["Precision", "Recall", "Num Acts"]
 sort_by_name = sort_col.radio(

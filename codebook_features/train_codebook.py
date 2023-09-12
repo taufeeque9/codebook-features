@@ -106,7 +106,7 @@ def get_optimizer(training_args, model):
     return optimizer
 
 
-@hydra.main(config_path="config", config_name="main")
+@hydra.main(config_path="config", config_name="main", version_base=None)
 def main(cfg):
     """Train codebook based models parametrized using hydra.
 
@@ -150,10 +150,8 @@ def main(cfg):
         pretrained_path=cfg.pretrained_path,
     )
 
-    if cfg.disable_logging:
-        if codebook_config.replace_codes:
-            raise ValueError("Cannot disable logging with code replacement.")
-        model.disable_logging()
+    if cfg.enable_logging:
+        model.enable_logging()
 
     optimizer = get_optimizer(training_args, model)
 

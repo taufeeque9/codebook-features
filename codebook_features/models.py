@@ -698,7 +698,7 @@ class CodebookLayer(nn.Module):
         self.codebook.partial_fit()
 
 
-class CompositionalCodebookLayer(nn.Module):
+class GroupCodebookLayer(nn.Module):
     """Module that applies distinct codebooks to chunks of input vectors."""
 
     def __init__(
@@ -716,13 +716,13 @@ class CompositionalCodebookLayer(nn.Module):
         replace_rho: float = 0.0,
         kcodes: int = 1,
     ):
-        """Create the compositional codebook layer.
+        """Create the group codebook layer.
 
         Args:
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             key: key to identify the codebook in hook caches.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+            num_codebooks: number of codebooks to use in group. Should divide `dim`. Defaults to 1.
             soft_snap: whether to snap the input using softmax. Defaults to False.
             snap_fn: snap function to use.
                 Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
@@ -843,7 +843,7 @@ class CompositionalCodebookLayer(nn.Module):
         Args:
             x: input tensor of shape: (batch_size, seq_len, dim) or (batch_size, seq_len, num_heads, dim).
 
-        Returns: output with the feature vectors replaced using the compositional codebook.
+        Returns: output with the feature vectors replaced using the group codebook.
         """
         if len(x.shape) == 4:
             assert (
@@ -913,7 +913,7 @@ class CompositionalCodebookLayer(nn.Module):
 
     def most_common_counts(self):
         """Return the counts of the codebook features."""
-        # num_codes contains total codes across compositional codebooks
+        # num_codes contains total codes across group codebooks
         counts = np.zeros(self.num_codes // self.num_codebooks)
         for codebook in self.codebook:
             counts += codebook.most_common_counts()
@@ -940,171 +940,6 @@ class CompositionalCodebookLayer(nn.Module):
             codebook.partial_fit_codebook()
 
 
-class GroupedCodebookLayer(nn.Module):
-    """Module that applies distinct codebooks to chunks of input vectors."""
-
-    def __init__(
-        self,
-        dim: int,
-        num_codes: int,
-        key: str,
-        kmeans_init=False,
-        soft_snap: bool = False,
-        snap_fn: Type[BaseSnapFunction] = EuclideanSnapFunction,
-        num_codebooks: int = 1,
-        hook_fn: Optional[Callable] = None,
-        kmeans_kwargs: Optional[Dict] = None,
-    ):
-        """Create the compositional codebook layer.
-
-        Args:
-            dim: dimension size of the codebook features.
-            num_codes: number of codebook features to have.
-            key: key to identify the codebook in hook caches.ff
-            num_codebooks: number of codebooks to use. Should divide `dim`. Defaults to 1.
-            soft_snap: whether to snap the input using softmax. Defaults to False.
-            snap_fn: snap function to use.
-                Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
-            hook_fn: hook function apply to codebook ids.
-            kmeans_init: whether to initialize the codebook with k-means of the data. Defaults to False.
-            kmeans_kwargs: dictionary of arguments to pass to k-means embedding layer.
-            kcodes: number of codebook features to use for computing the output.
-        """
-        super().__init__()
-        if num_codes % num_codebooks != 0:
-            raise ValueError(
-                "num_codes must be divisible by num_codebooks."
-                f" Got num_codes: {num_codes}, num_codebooks: {num_codebooks}"
-            )
-
-        if kmeans_kwargs is None:
-            kmeans_kwargs = {}
-        seed = kmeans_kwargs.get("random_state", 0)
-        self.codebook: Any = nn.ModuleList(
-            [
-                CodebookLayer(
-                    dim=dim,
-                    num_codes=num_codes // num_codebooks,
-                    key=key + f"_gcb{i}",
-                    kmeans_init=kmeans_init,
-                    soft_snap=soft_snap,
-                    snap_fn=snap_fn,
-                    hook_fn=hook_fn,
-                    kmeans_kwargs={**kmeans_kwargs, "random_state": seed + i},
-                )
-                for i in range(num_codebooks)
-            ]
-        )
-        self.num_codebooks = num_codebooks
-        self.hook_fn = hook_fn
-        self.key = key
-
-    def get_triggered_codes(self):
-        """Return the triggered codes of the codebooks."""
-        triggered_codes = [codebook.get_triggered_codes() for codebook in self.codebook]
-        return torch.cat(triggered_codes, dim=0)
-
-    @property
-    def active_codes(self):
-        """Return the number of active codes in all the codebooks."""
-        return sum(codebook.active_codes for codebook in self.codebook)
-
-    @property
-    def num_codes(self):
-        """Return the total number of codes in all the codebooks."""
-        return sum(codebook.num_codes for codebook in self.codebook)
-
-    @property
-    def reconstruction_mse(self):
-        """Return the reconstruction mse of the codebooks."""
-        return sum(codebook.reconstruction_mse for codebook in self.codebook) / len(
-            self.codebook
-        )
-
-    @property
-    def input_norm(self):
-        """Return the input norm of the codebooks."""
-        return sum(codebook.input_norm for codebook in self.codebook) / len(
-            self.codebook
-        )
-
-    @property
-    def output_norm(self):
-        """Return the output norm of the codebooks."""
-        return sum(codebook.output_norm for codebook in self.codebook) / len(
-            self.codebook
-        )
-
-    def get_most_used_code(self):
-        """Return the most used code. Uses the first codebook by default."""
-        return self.codebook[0].get_most_used_code()
-
-    def set_hook_fn(self, hook_fn):
-        """Set the hook function."""
-        self.hook_fn = hook_fn
-        for codebook in self.codebook:
-            codebook.set_hook_fn(hook_fn)
-
-    def forward(self, x):
-        """Snaps activations to elements in the codebook.
-
-        Args:
-            x: input tensor of shape: (batch_size, seq_len, dim).
-
-        Returns: output with the feature vectors replaced using the compositional codebook.
-        """
-        assert len(x.shape) == 3
-        output = torch.stack(
-            [codebook(x) for codebook in self.codebook],
-            dim=0,
-        )
-        output = output.mean(dim=0)
-        return output
-
-    def reset_metrics(self):
-        """Reset the metrics stored in the codebooks."""
-        for codebook in self.codebook:
-            codebook.reset_metrics()
-
-    def avg_norm(self):
-        """Return the average norm of the codebook features."""
-        return (
-            sum(codebook.avg_norm() for codebook in self.codebook) / self.num_codebooks
-        )
-
-    def max_norm(self):
-        """Return the average norm of the codebook features."""
-        return max(codebook.max_norm() for codebook in self.codebook)
-
-    def most_common_counts(self):
-        """Return the counts of the codebook features."""
-        # num_codes contains total codes across compositional codebooks
-        counts = np.zeros(self.num_codes // self.num_codebooks)
-        for codebook in self.codebook:
-            counts += codebook.most_common_counts()
-        return counts
-
-    def load_data(self, data: torch.Tensor):
-        """Load data into the codebook."""
-        for codebook in self.codebook:
-            codebook.load_data(data)
-
-    def clear_data(self):
-        """Clear the data stored in the codebook."""
-        for codebook in self.codebook:
-            codebook.clear_data()
-
-    def initialize(self):
-        """Initialize the codebook using kmeans."""
-        for codebook in self.codebook:
-            codebook.initialize()
-
-    def partial_fit_codebook(self):
-        """Apply kmeans fit on codebook using the current data."""
-        for codebook in self.codebook:
-            codebook.partial_fit_codebook()
-
-
 class CodebookWrapper(nn.Module, abc.ABC):
     """Abstract class to wraps a nn module by applying codebooks on the output of the layer."""
 
@@ -1113,8 +948,7 @@ class CodebookWrapper(nn.Module, abc.ABC):
         module_layer: nn.Module,
         codebook_cls: Union[
             Type[CodebookLayer],
-            Type[CompositionalCodebookLayer],
-            Type[GroupedCodebookLayer],
+            Type[GroupCodebookLayer],
         ],
         dim: int,
         num_codes: int,
@@ -1129,13 +963,13 @@ class CodebookWrapper(nn.Module, abc.ABC):
         Args:
             module_layer: module layer to wrap codebook on.
             codebook_cls: codebook class to use. Can be either `CodebookLayer` (default),
-                `CompositionalCodebookLayer` or `GroupedCodebookLayer`.
+                `GroupCodebookLayer` or `GroupedCodebookLayer`.
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             key: key to identify the codebook in hook caches.
             snap_fn: snap function to use.
                 Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+            num_codebooks: number of codebooks to use in a group. Should divide `dim`. Defaults to 1.
             hook_fn: hook function to apply to codebook ids. Defaults to None.
             kwargs: additional keyword arguments to pass to the codebook.
         """
@@ -1182,8 +1016,7 @@ class TransformerLayerWrapper(CodebookWrapper):
         module_layer: nn.Module,
         codebook_cls: Union[
             Type[CodebookLayer],
-            Type[CompositionalCodebookLayer],
-            Type[GroupedCodebookLayer],
+            Type[GroupCodebookLayer],
         ],
         dim: int,
         num_codes: int,
@@ -1198,13 +1031,13 @@ class TransformerLayerWrapper(CodebookWrapper):
         Args:
             module_layer: module layer to wrap codebook on.
             codebook_cls: codebook class to use. Can be either `CodebookLayer` (default),
-                `CompositionalCodebookLayer` or `GroupedCodebookLayer`.
+                `GroupCodebookLayer` or `GroupedCodebookLayer`.
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             key: key to identify the codebook in hook caches.
             snap_fn: snap function to use.
                 Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+            num_codebooks: number of codebooks to use in a group. Should divide `dim`. Defaults to 1.
             hook_fn: hook function to apply to codebook ids. Defaults to None.
             kwargs: additional keyword arguments to pass to the codebook.
         """
@@ -1250,8 +1083,7 @@ class MLPWrapper(CodebookWrapper):
         module_layer: nn.Module,
         codebook_cls: Union[
             Type[CodebookLayer],
-            Type[CompositionalCodebookLayer],
-            Type[GroupedCodebookLayer],
+            Type[GroupCodebookLayer],
         ],
         dim: int,
         num_codes: int,
@@ -1266,13 +1098,13 @@ class MLPWrapper(CodebookWrapper):
         Args:
             module_layer: module layer to wrap codebook on.
             codebook_cls: codebook class to use. Can be either `CodebookLayer` (default),
-                `CompositionalCodebookLayer` or `GroupedCodebookLayer`.
+                `GroupCodebookLayer` or `GroupedCodebookLayer`.
             dim: dimension size of the codebook features.
             num_codes: number of codebook features to have.
             key: key to identify the codebook in hook caches.
             snap_fn: snap function to use.
                 Can be either `EuclideanSnapFunction` (default) or `InnerProductSnapFunction`.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+            num_codebooks: number of codebooks to use in a group. Should divide `dim`. Defaults to 1.
             hook_fn: hook function to apply to codebook ids. Defaults to None.
             kwargs: additional keyword arguments to pass to the codebook.
         """
@@ -1328,10 +1160,10 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         """Create the config for the codebook model.
 
         Args:
-            codebook_type: type of codebook to use. Can be either 'vanilla' (default, uses `CodebookLayer`),
-                'compositional', or 'grouped'.
+            codebook_type: type of codebook to use. Can be either 'vanilla' (default, uses `CodebookLayer`)
+                or 'group'.
             num_codes: number of codebook features to have.
-            num_codebooks: number of codebooks to use compositionally. Should divide `dim`. Defaults to 1.
+            num_codebooks: number of codebooks to use in a group. Should divide `dim`. Defaults to 1.
             layers_to_snap: Index of transformer layers in the model on which codebook to apply.
                 Defaults to []. Can contain negative numbers to index from the last layers.
             similarity_metric: similarity metric to use. Can be either 'euclidean' (default) or 'inner_product'.
@@ -1355,8 +1187,7 @@ class CodebookModelConfig(transformers.PretrainedConfig):
         for i in range(len(codebook_type)):
             if codebook_type[i] not in [
                 "vanilla",
-                "compositional",
-                "grouped",
+                "group",
             ]:
                 raise ValueError(f"Invalid codebook type {codebook_type[i]}")
             if codebook_type[i] == "vanilla" and num_codebooks[i] != 1:  # type: ignore
@@ -1414,6 +1245,9 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.add_codebooks()
         # override the forward method
         self.forward = self.model.forward
+        # disable logging by default
+        if not self.config.replace_codes:
+            self.disable_logging()
 
     def __setattr__(self, name: str, value: Any) -> None:
         """If the model is set, override the forward method using the new model.
@@ -1452,10 +1286,8 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         for cb_type in self.config.codebook_type:
             if cb_type == "vanilla":
                 self.codebook_cls.append(CodebookLayer)
-            elif cb_type == "compositional":
-                self.codebook_cls.append(CompositionalCodebookLayer)
-            elif cb_type == "grouped":
-                self.codebook_cls.append(GroupedCodebookLayer)
+            elif cb_type == "group":
+                self.codebook_cls.append(GroupCodebookLayer)
 
     def set_codebook_args(self):
         """Set the number of codebooks based on the `num_codebooks` configuration."""
@@ -1600,7 +1432,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         qkv = attn.__getattr__(self.qkv_key)
         wrapped_hidden_layer = MLPWrapper(
             qkv,
-            codebook_cls=CompositionalCodebookLayer,
+            codebook_cls=GroupCodebookLayer,
             dim=3 * self.d_model,
             num_codes=self.config.num_codes,
             key=f"layer{i}_qkv",

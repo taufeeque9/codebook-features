@@ -154,7 +154,6 @@ def features_to_tokens(cb_key, cb_acts, num_codes, code=None):
 
 def color_str(s: str, html: bool, color: Optional[str] = None):
     """Color the string for html or terminal."""
-
     if html:
         color = "DeepSkyBlue" if color is None else color
         return f"<span style='color:{color}'>{s}</span>"
@@ -434,7 +433,6 @@ def in_hook_list(list_of_arg_tuples, layer, head=None):
     return False
 
 
-# def generate_with_codes(input, code, cb_at, layer_idx, head_idx=None, pos=None, disable_other_comps=False):
 def generate_with_codes(
     input,
     cb_model,
@@ -540,38 +538,47 @@ def common_codes_in_cache(cache_codes, threshold=0.0):
 
 
 def parse_code_info_string(
-    info_str: str, cb_at="attn", pos=None, code_pos=-1
+    info_str: str,
+    cb_at: str = "attn",
+    pos: Optional[int] = None,
+    code_pos: Optional[int] = -1,
 ) -> CodeInfo:
     """Parse the code info string.
 
     The format of the `info_str` is:
     `code: 0, layer: 0, head: 0, occ_freq: 0.0, train_act_freq: 0.0`.
     """
-    code, layer, head, occ_freq, train_act_freq = info_str.split(", ")
-    code = int(code.split(": ")[1])
-    layer = int(layer.split(": ")[1])
-    head = int(head.split(": ")[1]) if head else None
-    occ_freq = float(occ_freq.split(": ")[1])
-    train_act_freq = float(train_act_freq.split(": ")[1])
+    info_list = info_str.split(", ")
+    code = int(info_list[0].split(": ")[1])
+    layer = int(info_list[1].split(": ")[1])
+    head = int(info_list[2].split(": ")[1]) if info_list[2] else None
     return CodeInfo(code, layer, head, pos=pos, code_pos=code_pos, cb_at=cb_at)
 
 
-def parse_concept_codes_string(info_str: str, pos=None, code_append=False):
-    """Parse the concept codes string."""
+def parse_topic_codes_string(
+    info_str: str,
+    pos: Optional[int] = None,
+    code_append: Optional[bool] = False,
+):
+    """Parse the topic codes string."""
     code_info_strs = info_str.strip().split("\n")
-    concept_codes = []
+    code_info_strs = [e.strip() for e in code_info_strs if e]
+    topic_codes = []
     layer, head = None, None
-    code_pos = "append" if code_append else -1
+    if code_append is None:
+        code_pos = None
+    else:
+        code_pos = "append" if code_append else -1
     for code_info_str in code_info_strs:
-        concept_codes.append(
+        topic_codes.append(
             parse_code_info_string(code_info_str, pos=pos, code_pos=code_pos)
         )
-        if code_append:
+        if code_append is None or code_append:
             continue
-        if layer == concept_codes[-1].layer and head == concept_codes[-1].head:
+        if layer == topic_codes[-1].layer and head == topic_codes[-1].head:
             code_pos -= 1
         else:
             code_pos = -1
-        concept_codes[-1].code_pos = code_pos
-        layer, head = concept_codes[-1].layer, concept_codes[-1].head
-    return concept_codes
+        topic_codes[-1].code_pos = code_pos
+        layer, head = topic_codes[-1].layer, topic_codes[-1].head
+    return topic_codes
