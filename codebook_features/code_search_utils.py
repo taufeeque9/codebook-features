@@ -7,8 +7,9 @@ from typing import Optional
 
 import numpy as np
 import torch
-from codebook_features import utils
 from tqdm import tqdm
+
+from codebook_features import utils
 
 
 def load_dataset_cache(cache_base_path):
@@ -236,22 +237,21 @@ def compare_codes_with_neurons(
     ) = zip(
         *[
             get_neurons_from_pattern(
-                code_info.re_pattern,
+                code_info.regex,
                 tokens_text,
                 token_byte_pos,
                 neuron_acts_by_ex,
                 neuron_sorted_acts,
                 code_info.recall,
             )
-            for code_info in tqdm(range(len(best_codes_info)))
+            for code_info in tqdm(best_codes_info)
         ],
         strict=True,
     )
-    code_best_precs = np.array(
-        [code_info.prec for code_info in range(len(best_codes_info))]
-    )
-    codes_better_than_neurons = code_best_precs > np.array(all_best_prec)
-    return codes_better_than_neurons.mean()
+    all_best_prec = np.array(all_best_prec)
+    code_best_precs = np.array([code_info.prec for code_info in best_codes_info])
+    codes_better_than_neurons = code_best_precs > all_best_prec
+    return codes_better_than_neurons.mean(), code_best_precs, np.array(all_best_prec)
 
 
 def get_code_info_pr_from_str(code_txt, regex):
@@ -259,7 +259,7 @@ def get_code_info_pr_from_str(code_txt, regex):
     code_txt = code_txt.strip()
     code_txt = code_txt.split(", ")
     code_txt = dict(txt.split(": ") for txt in code_txt)
-    return utils.CodeInfo(**code_txt)
+    return utils.CodeInfo(regex=regex, **code_txt)
 
 
 @dataclass
@@ -294,4 +294,5 @@ def parse_model_info(path):
     with open(path + "info.txt", "r") as f:
         lines = f.readlines()
         lines = dict(line.strip().split(": ") for line in lines)
+        return ModelInfoForWebapp(**lines)
         return ModelInfoForWebapp(**lines)
