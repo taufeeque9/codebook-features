@@ -15,6 +15,7 @@ import wandb
 from codebook_features import models, run_clm
 from codebook_features import trainer as cb_trainer
 
+# shortened arg names to compress wandb titles
 shortened_args = {
     "model_name_or_path": "mod",
     "learning_rate": "lr",
@@ -34,7 +35,7 @@ shortened_args = {
 
 
 def prepare_logging(cfg):
-    """Prepare logging for wandb."""
+    """Prepare log config and tags for wandb."""
     cfg_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True)
     flat_cfg_dict = pd.json_normalize(cfg_dict, sep="@").to_dict(orient="records")[0]
     flat_cfg_dict = {k.split("@")[-1]: v for k, v in flat_cfg_dict.items()}
@@ -113,7 +114,7 @@ def main(cfg):
     Args:
         cfg: hydra config.
 
-    Returns: tuple of metrics for trained model and the baseline metrics.
+    Returns: metrics for the trained model.
     """
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     cfg_dict, tags = prepare_logging(cfg)
@@ -175,7 +176,7 @@ def main(cfg):
         model.init_codebook(trainer.get_train_dataloader())
 
     model.enable_codebooks()
-    # compile not works on Windows currently
+    # compile doesn't work on Windows or python 3.11+ currently
     if os.name != "nt" and sys.version_info < (3, 11):
         model = torch.compile(model)
     metrics = run_clm.run_trainer(

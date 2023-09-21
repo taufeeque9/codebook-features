@@ -52,8 +52,6 @@ codebook_args:
   replace_codes: False
 
 k_scheduler_kwargs: null
-#   k_max: 10000
-#   decay_steps: 5000
 
 enable_logging: False
 pretrained_path: null

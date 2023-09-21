@@ -38,7 +38,6 @@ codebook_args:
   loss: aeloss
   k_codebook: 3
   kmeans_init: False
-  # kmeans_path: kmeans_embeddings.pt
   kmeans_path: null
   kmeans_init_examples: 1000
   kmeans_kwargs:
@@ -49,8 +48,6 @@ codebook_args:
   replace_codes: True
 
 k_scheduler_kwargs: null
-  # k_max: 100
-  # decay_steps: 2
 
 enable_logging: False
 pretrained_path: null
