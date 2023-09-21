@@ -150,7 +150,6 @@ class BaseSnapFunction(torch.autograd.Function):
             # straight through estimator
             grad_inputs = grad_outputs
         elif BaseSnapFunction.loss == "aeloss":
-            # grad_codebook_mse = torch.autograd.grad(mse, codebook, retain_graph=True)[0]
             with torch.enable_grad():
                 mse_loss = torch.mean(((outputs - inputs) ** 2).sum(dim=-1))
                 grad_codebook_mse = torch.autograd.grad(
@@ -515,7 +514,6 @@ class CodebookLayer(nn.Module):
         """
         assert len(x.shape) == 3  # (batch_size, seq_len, dim)
         if not self.soft_snap:
-            # Hard choice of a single codebook vector
             normalized_input = self.ln(x)
             if self.snap_fn == FaissSnapFunction:
                 output, codebook_ids = self.snap_fn.apply(
@@ -546,10 +544,6 @@ class CodebookLayer(nn.Module):
             # update metrics
             if self.logging:
                 with torch.no_grad():
-                    #                    self.codes_triggered, counts = torch.unique(
-                    #                        codebook_ids.cpu(), sorted=False, return_counts=True
-                    #                    )
-                    #                    self.counts[self.codes_triggered] += counts
                     self.codes_triggered = torch.unique(
                         codebook_ids.cpu(), sorted=False, return_counts=False
                     )
@@ -577,18 +571,7 @@ class CodebookLayer(nn.Module):
             if self.hook_fn is not None:
                 self.hook_fn(self.key, codebook_ids.cpu().numpy())
         else:
-            # NOTE: was previously doing a gumbel softmax,
-            # but found this was not necessary
-            # codebook_weights = torch.nn.functional.gumbel_softmax(
-            #   logits, hard=False, tau=tau)
-            logits = torch.matmul(x, self.codebook.weight.T)
-            codebook_weights = torch.nn.functional.softmax(logits, dim=-1)
-
-            # Perform a soft average over the codebook vectors.
-            # [batch_size, codebook_size, 1] * [1, codebook_size, dim]
-            output = codebook_weights.unsqueeze(-1) * self.codebook.weight.unsqueeze(0)
-
-            output = output.sum(-2)  # codebook size
+            raise NotImplementedError("Soft snap not implemented.")
         return output
 
     def get_triggered_codes(self):
@@ -1286,9 +1269,9 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def from_pretrained(cls, *args, **kwargs):
         """Create a codebook model from pretrained model."""
         model = super().from_pretrained(*args, **kwargs)
-        # for codebooks in model.all_codebooks.values():
-        #     for codebook in codebooks:
-        #         codebook.normalize_L2()
+        for codebooks in model.all_codebooks.values():
+            for codebook in codebooks:
+                codebook.normalize_L2()
         return model
 
     def use_faiss(self, device=None):

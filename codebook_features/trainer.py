@@ -108,13 +108,6 @@ class CodebookTrainer(transformers.Trainer):
                     ] = layer_max_norm
                     mean_norm += layer_mean_norm
                     max_norm = max(max_norm, layer_max_norm)
-                    # table = wandb.Table(
-                    #     data=codebooks[0].most_common_counts(),
-                    #     columns=["freq"],
-                    # )
-                    # logs[
-                    #     f"cb_histogram_layer{codebook_idx}"
-                    # ] = wandb.plot.histogram(table, "freq", title="Codebook Histogram")
                 overall_dead_code_count += dead_code_count
                 total_codes += layer_codes
 

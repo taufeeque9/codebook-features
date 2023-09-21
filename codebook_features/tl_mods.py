@@ -6,6 +6,9 @@ from transformers import AutoConfig
 
 # Taken from the commit:
 # https://github.com/neelnanda-io/TransformerLens/commit/54d548de4995a1ecc5b01b9c03aceaf0966c0eb3
+# The function `convert_state_dict` is added for convenience.
+# The function `convert_hf_model_config` is modified to support unofficial model names provided that
+# the `hf_config` is provided.
 
 
 def convert_state_dict(model, cfg: transformer_lens.HookedTransformerConfig):
