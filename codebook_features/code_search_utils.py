@@ -31,17 +31,20 @@ def load_code_search_cache(cache_base_path):
     return cb_acts, act_count_ft_tkns, metrics
 
 
-def search_re(re_pattern, tokens_text):
+def search_re(re_pattern, tokens_text, at_odd_even=-1):
     """Get list of (example_id, token_pos) where re_pattern matches in tokens_text."""
     # TODO: ensure that parantheses are not escaped
     if re_pattern.find("(") == -1:
         re_pattern = f"({re_pattern})"
-    return [
+    res = [
         (i, finditer.span(1)[0])
         for i, text in enumerate(tokens_text)
         for finditer in re.finditer(re_pattern, text)
         if finditer.span(1)[0] != finditer.span(1)[1]
     ]
+    if at_odd_even != -1:
+        res = [r for r in res if r[1] % 2 == at_odd_even]
+    return res
 
 
 def byte_id_to_token_pos_id(example_byte_id, token_byte_pos):
@@ -171,9 +174,10 @@ def get_codes_from_pattern(
     ccb="",
     topk=5,
     prec_threshold=0.5,
+    at_odd_even=-1,
 ):
     """Fetch codes from a given regex pattern."""
-    byte_ids = search_re(re_pattern, tokens_text)
+    byte_ids = search_re(re_pattern, tokens_text, at_odd_even=at_odd_even)
     token_pos_ids = [
         byte_id_to_token_pos_id(ex_byte_id, token_byte_pos) for ex_byte_id in byte_ids
     ]
@@ -203,9 +207,10 @@ def get_neurons_from_pattern(
     neuron_acts_by_ex,
     neuron_sorted_acts,
     recall_threshold,
+    at_odd_even=-1,
 ):
     """Fetch the best neuron (with act thresh given by recall) from a given regex pattern."""
-    byte_ids = search_re(re_pattern, tokens_text)
+    byte_ids = search_re(re_pattern, tokens_text, at_odd_even=at_odd_even)
     token_pos_ids = [
         byte_id_to_token_pos_id(ex_byte_id, token_byte_pos) for ex_byte_id in byte_ids
     ]
@@ -226,6 +231,7 @@ def compare_codes_with_neurons(
     token_byte_pos,
     neuron_acts_by_ex,
     neuron_sorted_acts,
+    at_odd_even=-1,
 ):
     """Compare codes with neurons."""
     assert isinstance(neuron_acts_by_ex, np.ndarray)
@@ -243,6 +249,7 @@ def compare_codes_with_neurons(
                 neuron_acts_by_ex,
                 neuron_sorted_acts,
                 code_info.recall,
+                at_odd_even=at_odd_even,
             )
             for code_info in tqdm(best_codes_info)
         ],
@@ -294,5 +301,4 @@ def parse_model_info(path):
     with open(path + "info.txt", "r") as f:
         lines = f.readlines()
         lines = dict(line.strip().split(": ") for line in lines)
-        return ModelInfoForWebapp(**lines)
         return ModelInfoForWebapp(**lines)
