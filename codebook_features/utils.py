@@ -387,63 +387,16 @@ def cb_layer_name_to_info(layer_name):
     return cb_at, layer_idx, head_idx
 
 
-def run_with_codes(
+def run_model_fn_with_codes(
     input,
     cb_model,
-    code,
-    cb_at,
-    layer_idx,
-    head_idx=None,
-    pos=None,
-    code_pos=None,
-    prepend_bos=True,
-):
-    """Run the model with the codebook features patched in."""
-    hook_fns = [
-        partial(patch_in_codes, pos=pos, code=code[i], code_pos=code_pos)
-        for i in range(len(code))
-    ]
-    cb_model.reset_codebook_metrics()
-    cb_model.reset_hook_kwargs()
-    fwd_hooks = [
-        (get_cb_layer_name(cb_at[i], layer_idx[i], head_idx[i]), hook_fns[i])
-        for i in range(len(cb_at))
-    ]
-    with cb_model.hooks(fwd_hooks, [], True, False) as hooked_model:
-        patched_logits, patched_cache = hooked_model.run_with_cache(
-            input, prepend_bos=prepend_bos
-        )
-    return patched_logits, patched_cache
-
-
-def in_hook_list(list_of_arg_tuples, layer, head=None):
-    """Check if the component specified by `layer` and `head` is in the `list_of_arg_tuples`."""
-    # if head is not provided, then checks in MLP
-    for arg_tuple in list_of_arg_tuples:
-        if head is None:
-            if arg_tuple.cb_at == "mlp" and arg_tuple.layer == layer:
-                return True
-        else:
-            if (
-                arg_tuple.cb_at == "attn"
-                and arg_tuple.layer == layer
-                and arg_tuple.head == head
-            ):
-                return True
-    return False
-
-
-def generate_with_codes(
-    input,
-    cb_model,
+    fn_name,
+    fn_kwargs=None,
     list_of_code_infos=(),
-    disable_other_comps=False,
-    automata=None,
-    generate_kwargs=None,
 ):
     """Model's generation with the codebook features patched in."""
-    if generate_kwargs is None:
-        generate_kwargs = {}
+    if fn_kwargs is None:
+        fn_kwargs = {}
     hook_fns = [
         partial(patch_in_codes, pos=tupl.pos, code=tupl.code, code_pos=tupl.code_pos)
         for tupl in list_of_code_infos
@@ -453,19 +406,26 @@ def generate_with_codes(
         for i, tupl in enumerate(list_of_code_infos)
     ]
     cb_model.reset_hook_kwargs()
-    if disable_other_comps:
-        for layer, cb in cb_model.all_codebooks.items():
-            for head_idx, head in enumerate(cb[0].codebook):
-                if not in_hook_list(list_of_code_infos, layer, head_idx):
-                    head.set_hook_kwargs(
-                        disable_topk=1, disable_for_tkns=[-1], keep_k_codes=False
-                    )
-            if not in_hook_list(list_of_code_infos, layer):
-                cb[1].set_hook_kwargs(
-                    disable_topk=1, disable_for_tkns=[-1], keep_k_codes=False
-                )
     with cb_model.hooks(fwd_hooks, [], True, False) as hooked_model:
-        gen = hooked_model.generate(input, **generate_kwargs)
+        ret = hooked_model.__getattribute__(fn_name)(input, **fn_kwargs)
+    return ret
+
+
+def generate_with_codes(
+    input,
+    cb_model,
+    list_of_code_infos=(),
+    automata=None,
+    generate_kwargs=None,
+):
+    """Model's generation with the codebook features patched in."""
+    gen = run_model_fn_with_codes(
+        input,
+        cb_model,
+        "generate",
+        generate_kwargs,
+        list_of_code_infos,
+    )
     return automata.seq_to_traj(gen)[0] if automata is not None else gen
 
 
@@ -504,13 +464,6 @@ def JSD(logits1, logits2, pos=-1, reduction="batchmean"):
         reduction=reduction,
     )
     return 0.5 * loss
-
-
-def residual_stream_patching_hook(resid_pre, hook, cache, position: int):
-    """Patch in the codebook features at `position` from `cache`."""
-    clean_resid_pre = cache[hook.name]
-    resid_pre[:, position, :] = clean_resid_pre[:, position, :]
-    return resid_pre
 
 
 def find_code_changes(cache1, cache2, pos=None):
@@ -561,3 +514,16 @@ def parse_topic_codes_string(
         topic_codes[-1].code_pos = code_pos
         layer, head = topic_codes[-1].layer, topic_codes[-1].head
     return topic_codes
+
+
+def find_similar_codes(cb_model, code_info, n=8):
+    """Find the n most similar codes to the given code."""
+    codebook = cb_model.get_codebook(code_info)
+    device = codebook.weight.device
+    code = codebook(torch.tensor(code_info.code).to(device))
+    code = code.to(device)
+    logits = torch.matmul(code, codebook.weight.T)
+    _, indices = torch.topk(logits, n)
+    assert indices[0] == code_info.code
+    assert torch.allclose(logits[indices[0]], torch.tensor(1.0))
+    return indices[1:], logits[indices[1:]].tolist()
