@@ -36,19 +36,12 @@ codebook_args:
   similarity_metric: inner_product
   loss: aeloss
   kmeans_init: False
-  # kmeans_path: /.cache/cb_volume/huggingface/kmeans_embeddings.pt
-  # kmeans_init_examples: 1000
-  # kmeans_kwargs:
-  #   n_init: auto
-  #   batch_size: 24576
   codebook_kwargs:
     replace_after_steps: 0
     replace_rho: 1e-4
 
 
 k_scheduler_kwargs: null
-#   k_max: 10000
-#   decay_steps: 5000
 
 toy_dataset_args:
   path: null

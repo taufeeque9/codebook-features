@@ -26,6 +26,7 @@ from transformers import (
 from codebook_features import models, run_clm
 from codebook_features import trainer as cb_trainer
 
+# shortened arg names to compress wandb titles
 shortened_args = {
     "model_name_or_path": "mod",
     "learning_rate": "lr",
@@ -514,7 +515,12 @@ def main(cfg):
 
     lm_datasets = {"train": train_dataset, "validation": eval_dataset}
     metrics = run_clm.run_trainer(
-        model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint=None
+        model_args,
+        data_args,
+        training_args,
+        trainer,
+        lm_datasets,
+        last_checkpoint=None,
     )
     return metrics
 
