@@ -315,6 +315,7 @@ class EuclideanSnapFunction(BaseSnapFunction):
             )
             block_idx[:, :, : hook_kwargs["disable_topk"]] = True
             block_idx[:, unblock_tkns, :] = False
+            block_idx[:, :, hook_kwargs["disable_sim_idx"]] = True
             codebook_ids[block_idx] = -1
             input_codes[block_idx] = 0
             outputs = input_codes.sum(dim=-2) / kcodes
@@ -341,6 +342,7 @@ class FaissSnapFunction(BaseSnapFunction):
         """Compute output of the snap function using the faiss library.
 
         Replaces each dimension vector of input with the closest features from codebook.
+        Note that applying hooks with `hook_kwargs` is not supported with the faiss snap function.
 
         Args:
             ctx: torch context used for efficiently storing tensors for backward pass.
@@ -530,8 +532,9 @@ class CodebookLayer(nn.Module):
                     self.kcodes,
                     self.hook_kwargs,
                 )  # type: ignore
-            codebook_ids = self.hook_codebook_ids(codebook_ids)
             if not self.training:
+                # this hook is used to modify/block activated codes during inference
+                codebook_ids = self.hook_codebook_ids(codebook_ids)
                 block_idx = torch.isin(codebook_ids, -1)
                 # TODO: clean this.
                 # change -1 to 0 and zero ablate the blocked codes before computing mean
