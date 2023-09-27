@@ -174,7 +174,11 @@ class WandbCallback(transformers.integrations.WandbCallback):
                 logs.pop(metric_prefix + f"code_weights/layer{codebook_idx}")
 
     def log_code_counts_and_weight_distribution(self, logs, model, metric_prefix):
-        """Log the code activation plot and also the weight distribution of the most common codebook feature."""
+        """Log the code activation plot and also the weight distribution of the most common codebook feature.
+
+        Running this logging function can be expensive and slow down training. So, it is recommended to run this only
+        for debugging purposes.
+        """
         for codebook_idx, codebooks_dict in model.all_codebooks.items():
             first_codebook = list(codebooks_dict.values())[0]
             counts = first_codebook.most_common_counts()

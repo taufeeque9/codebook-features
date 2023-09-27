@@ -735,7 +735,7 @@ class GroupCodebookLayer(nn.Module):
                 CodebookLayer(
                     dim=dim // num_codebooks,
                     num_codes=num_codes,
-                    key=key + f"_ccb{i}",
+                    key=key + f"_gcb{i}",
                     kmeans_init=kmeans_init,
                     soft_snap=soft_snap,
                     snap_fn=snap_fn,

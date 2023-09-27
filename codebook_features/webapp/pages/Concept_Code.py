@@ -22,7 +22,7 @@ tokens_text = st.session_state["tokens_text"]
 tokens_str = st.session_state["tokens_str"]
 cb_acts = st.session_state["cb_acts"]
 act_count_ft_tkns = st.session_state["act_count_ft_tkns"]
-ccb = st.session_state["ccb"]
+gcb = st.session_state["gcb"]
 
 
 def get_example_concept_codes(example_id):
@@ -30,8 +30,8 @@ def get_example_concept_codes(example_id):
     token_pos_ids = [(example_id, i) for i in range(seq_len)]
     all_codes = []
     for cb_name, cb in cb_acts.items():
-        base_cb_name = code_search_utils.convert_to_base_name(cb_name, ccb=ccb)
-        codes, prec, rec, code_acts = code_search_utils.get_code_pr(
+        base_cb_name = code_search_utils.convert_to_base_name(cb_name, gcb=gcb)
+        codes, prec, rec, code_acts = code_search_utils.get_code_precision_and_recall(
             token_pos_ids,
             cb,
             act_count_ft_tkns[base_cb_name],

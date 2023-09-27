@@ -91,7 +91,7 @@ class ModelInfoForWebapp:
     dataset_name: str
     num_codes: int
     cb_at: str
-    ccb: str
+    gcb: str
     n_layers: int
     n_heads: Optional[int] = None
     seed: int = 42
@@ -163,7 +163,7 @@ def color_str(s: str, html: bool, color: Optional[str] = None):
         return colored(s, color)
 
 
-def color_tokens_automata(tokens, color_idx, html=False):
+def color_tokens_tokfsm(tokens, color_idx, html=False):
     """Separate states with a dash and color red the tokens in color_idx."""
     ret_string = ""
     itr_over_color_idx = 0
@@ -224,31 +224,48 @@ def prepare_example_print(
     return example_output
 
 
-def tkn_print(
-    ll,
+def print_token_activations_of_code(
+    code_act_by_pos,
     tokens,
-    is_automata=False,
+    is_tokfsm=False,
     n=3,
     max_examples=100,
     randomize=False,
     html=False,
     return_example_list=False,
 ):
-    """Format and prints the tokens in ll."""
+    """Print the context with the tokens that a code activates on.
+
+    Args:
+        code_act_by_pos: list of (example_id, token_pos_id) tuples specifying
+            the token positions that a code activates on in a dataset.
+        tokens: list of tokens of a dataset.
+        is_tokfsm: whether the dataset is the TokFSM dataset.
+        n: context to print around each side of a token that the code activates on.
+        max_examples: maximum number of examples to print.
+        randomize: whether to randomize the order of examples.
+        html: Format the printing style for html or terminal.
+        return_example_list: whether to return the printed string by examples or as a single string.
+
+    Returns:
+        string of all examples formatted if `return_example_list` is False otherwise
+        list of (example_string, num_tokens_colored) tuples for each example.
+    """
     if randomize:
         raise NotImplementedError("Randomize not yet implemented.")
-    indices = range(len(ll))
+    indices = range(len(code_act_by_pos))
     print_output = [] if return_example_list else ""
-    curr_ex = ll[0][0]
+    curr_ex = code_act_by_pos[0][0]
     total_examples = 0
     tokens_to_color = []
-    color_fn = color_tokens_automata if is_automata else partial(color_tokens, n=n)
+    color_fn = color_tokens_tokfsm if is_tokfsm else partial(color_tokens, n=n)
     for idx in indices:
         if total_examples > max_examples:
             break
-        i, j = ll[idx]
+        i, j = code_act_by_pos[idx]
 
         if i != curr_ex and curr_ex >= 0:
+            # got new example so print the previous one
             curr_ex_output = prepare_example_print(
                 curr_ex,
                 tokens[curr_ex],
@@ -281,10 +298,10 @@ def tkn_print(
     return print_output
 
 
-def print_ft_tkns(
+def print_token_activations_of_codes(
     ft_tkns,
     tokens,
-    is_automata=False,
+    is_tokfsm=False,
     n=3,
     start=0,
     stop=1000,
@@ -300,17 +317,17 @@ def print_ft_tkns(
     num_tokens = len(tokens) * len(tokens[0])
     codes, token_act_freqs, token_acts = [], [], []
     for i in indices:
-        tkns = ft_tkns[i]
-        freq = (len(tkns), 100 * len(tkns) / num_tokens)
+        tkns_of_code = ft_tkns[i]
+        freq = (len(tkns_of_code), 100 * len(tkns_of_code) / num_tokens)
         if freq_filter is not None and freq[1] > freq_filter:
             continue
         codes.append(i)
         token_act_freqs.append(freq)
-        if len(tkns) > 0:
-            tkn_acts = tkn_print(
-                tkns,
+        if len(tkns_of_code) > 0:
+            tkn_acts = print_token_activations_of_code(
+                tkns_of_code,
                 tokens,
-                is_automata,
+                is_tokfsm,
                 n=n,
                 max_examples=max_examples,
                 randomize=randomize,
@@ -419,7 +436,7 @@ def generate_with_codes(
     input,
     cb_model,
     list_of_code_infos=(),
-    automata=None,
+    tokfsm=None,
     generate_kwargs=None,
 ):
     """Sample from the language model while activating the codes in `list_of_code_infos`."""
@@ -430,18 +447,7 @@ def generate_with_codes(
         generate_kwargs,
         list_of_code_infos,
     )
-    return automata.seq_to_traj(gen)[0] if automata is not None else gen
-
-
-def kl_div(logits1, logits2, pos=-1, reduction="batchmean"):
-    """Calculate the KL divergence between the logits at `pos`."""
-    logits1_last, logits2_last = logits1[:, pos, :], logits2[:, pos, :]
-    return F.kl_div(
-        F.log_softmax(logits1_last, dim=-1),
-        F.log_softmax(logits2_last, dim=-1),
-        log_target=True,
-        reduction=reduction,
-    )
+    return tokfsm.seq_to_traj(gen)[0] if tokfsm is not None else gen
 
 
 def JSD(logits1, logits2, pos=-1, reduction="batchmean"):

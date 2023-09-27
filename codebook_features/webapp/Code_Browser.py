@@ -9,6 +9,8 @@ import streamlit as st
 from codebook_features import code_search_utils, utils
 from codebook_features.webapp import utils as webapp_utils
 
+# --- Parse command line arguments ---
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--deploy",
@@ -41,6 +43,8 @@ st.set_page_config(
 
 st.title("Codebook Features")
 
+# --- Load model info and cache ---
+
 base_cache_dir = args.cache_dir
 dirs = glob.glob(base_cache_dir + "*/")
 model_name_options = [d.split("/")[-2].split("_")[:-2] for d in dirs]
@@ -67,8 +71,8 @@ num_codes = model_info.num_codes
 num_layers = model_info.n_layers
 num_heads = model_info.n_heads
 cb_at = model_info.cb_at
-ccb = model_info.ccb
-ccb = "_ccb" if ccb else ""
+gcb = model_info.gcb
+gcb = "_gcb" if gcb else ""
 is_attn = "attn" in cb_at
 
 (
@@ -83,6 +87,8 @@ seq_len = len(tokens_str[0])
 metric_keys = ["eval_loss", "eval_accuracy", "eval_dead_code_fraction"]
 metrics = {k: v for k, v in metrics.items() if k.split("/")[0] in metric_keys}
 
+# --- Set the session states ---
+
 st.session_state["model_name_id"] = model_name
 st.session_state["cb_acts"] = cb_acts
 st.session_state["tokens_text"] = tokens_text
@@ -90,7 +96,7 @@ st.session_state["tokens_str"] = tokens_str
 st.session_state["act_count_ft_tkns"] = act_count_ft_tkns
 
 st.session_state["num_codes"] = num_codes
-st.session_state["ccb"] = ccb
+st.session_state["gcb"] = gcb
 st.session_state["cb_at"] = cb_at
 st.session_state["is_attn"] = is_attn
 st.session_state["seq_len"] = seq_len
@@ -101,6 +107,8 @@ if not deploy:
     # hide metrics by default
     if st.checkbox("Show Model Metrics"):
         st.write(metrics)
+
+# --- Demo codes ---
 
 st.markdown("## Demo Codes")
 demo_codes_desc = (
@@ -179,6 +187,7 @@ if st.checkbox("Show Demo Codes"):
         cols[-1].write(code_desc)
         skip = True
 
+# --- Code Search ---
 
 st.markdown("## Code Search")
 
@@ -209,7 +218,7 @@ if st.checkbox("Search with Regex"):
 
     @st.cache_data(ttl=3600)
     def get_codebook_wise_codes_for_regex(
-        regex_pattern, prec_threshold, ccb, model_name
+        regex_pattern, prec_threshold, gcb, model_name
     ):
         """Get codebook wise codes for a given regex pattern."""
         assert model_name is not None  # required for loading from correct cache data
@@ -219,7 +228,7 @@ if st.checkbox("Search with Regex"):
             token_byte_pos,
             cb_acts,
             act_count_ft_tkns,
-            ccb=ccb,
+            gcb=gcb,
             topk=8,
             prec_threshold=prec_threshold,
         )
@@ -228,7 +237,7 @@ if st.checkbox("Search with Regex"):
         codebook_wise_codes, re_token_matches = get_codebook_wise_codes_for_regex(
             regex_pattern,
             prec_threshold,
-            ccb,
+            gcb,
             model_name,
         )
         st.markdown(
@@ -311,6 +320,7 @@ if st.checkbox("Search with Regex"):
                 unsafe_allow_html=True,
             )
 
+# --- Display Code Token Activations ---
 
 st.markdown("## Code Token Activations")
 

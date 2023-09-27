@@ -63,10 +63,10 @@ def load_ft_tkns(model_id, layer, head=None, code=None):
     # model_id required to not mix cache_data for different models
     assert model_id is not None
     cb_at = st.session_state["cb_at"]
-    ccb = st.session_state["ccb"]
+    gcb = st.session_state["gcb"]
     cb_acts = st.session_state["cb_acts"]
     if head is not None:
-        cb_name = f"layer{layer}_{cb_at}{ccb}{head}"
+        cb_name = f"layer{layer}_{cb_at}{gcb}{head}"
     else:
         cb_name = f"layer{layer}_{cb_at}"
     return utils.features_to_tokens(
@@ -91,7 +91,7 @@ def get_code_acts(
     """Get the token activations for a given code."""
     ft_tkns = load_ft_tkns(model_id, layer, head, code)
     ft_tkns = [ft_tkns]
-    _, freqs, acts = utils.print_ft_tkns(
+    _, freqs, acts = utils.print_token_activations_of_codes(
         ft_tkns,
         tokens=tokens_str,
         indices=[0],
