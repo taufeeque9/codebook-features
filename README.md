@@ -1,6 +1,9 @@
 # Codebook Features
 
-Codebook Features is a library for training neural networks along with vector quantization bottlenecks called _codebooks_ that serve as a good fundamental unit of analysis and control for neural networks. The library provides a range of features to intrepret a trained codebook model like analysing the activations of codes, searching for codes that activate on a pattern, and performing code interventions to verify the causal effect of a code on the output of a model. Many of these features are also available through an easy-to-use webapp that helps in analysing and experimenting with the codebook models.
+Codebook Features is a method for training neural networks with a set of learned sparse and discrete hidden states, enabling interpretability and control of the resulting model.
+
+Codebook features work by inserting vector quantization bottlenecks called _codebooks_ into each layer of a neural network. The library provides a range of features to train and interpret codebook models, including by analyzing the activations of codes, searching for codes that activate on a pattern, and performing code interventions to verify the causal effect of a code on the output of a model. Many of these features are also available through an easy-to-use webapp that helps in analyzing and experimenting with the codebook models.
+
 
 ## Installation
 Create a virtual environment and then:
@@ -14,7 +17,7 @@ pip install -e .
 
 ### Training a codebook model
 
-We use the [hydra](https://hydra.cc/) library for configuration management of the training scripts. The default config for training codebooks is available in `codebook_features/config/main.yaml`. The hydra syntax can be used to override any of the default config values. For example, to train a codebook model using gpt2-small on the wikitext dataset, run:
+We adapt the [run_clm.py](https://github.com/huggingface/transformers/blob/main/examples/pytorch/language-modeling/run_clm.py) script from HuggingFace to train/finetune conventional models or the codebook models. We also use the [hydra](https://hydra.cc/) library for configuration management of the training scripts. The default config for training codebooks is available in `codebook_features/config/main.yaml`. The hydra syntax can be used to override any of the default config values, which includes arguments for the codebook model and arguments inherited from Huggingface's [TrainingArguments](https://huggingface.co/docs/transformers/en/main_classes/trainer#transformers.TrainingArguments). For example, to train a codebook model using gpt2-small on the wikitext dataset, run:
 ```
 python -m codebook_features.train_codebook model_args.model_name_or_path=roneneldan/TinyStories-1M 'data_args.dataset_name=roneneldan/TinyStories'
 ```
@@ -33,9 +36,13 @@ python -m streamlit run codebook_features/webapp/Code_Browser.py -- --cache_dir 
 
 ### Code Intervention
 
-For a general tutorial on using codebook models and seeing how you can perform code intervention, please see the [Code Intervention Tutorial]().
+To control a network, one can _intervene_ on codes by causing them to always be activated during the forward pass. This can be useful to influence the sampled generations, e.g., to cause the network to discuss certain topics. For a general tutorial on using codebook models and seeing how you can perform code intervention, please see the [Code Intervention Tutorial]().
 
-## Guide
+
+<details>
+<summary>
+<h2>Guide to the codebase [click to expand] </h2>
+</summary>
 
 ### Codebook Model
 
@@ -56,7 +63,7 @@ For a general tutorial on using codebook models and seeing how you can perform c
 The `codebook_features/train_codebook.py` script is used to train a codebook model based on a causal language model. We use the `run_clm.py` script provided by the transformers library for training. It can take in a dataset name available in the [datasets](https://huggingface.co/datasets) library or a custom dataset. The default arguments for the training script is available in `codebook_features/config/main.yaml`. The hydra syntax can be used to override any of the default config values.
 
 ### Toy Experiments
-The `codebook_features/train_toy_model.py` script provides an algorithmic sequence modeling task to analyse the codebook models. The task is to predict the next element in a sequence of numbers generated using a Finite State Automata (FSM). The `train_toy_model/ToyGraph` class defines the FSM by taking in the number of states through `N`, the number of outbound edges from each state through `edges`, and the base in which to represent the state using `representation_base`. The `train_toy_model/ToyDataset` class defines an iterable torch dataset using the FSM that generates the dataset on the fly. The `train_toy_model/ToyModelTrainer` provides additional logging feature specific to the toy example like logging the transition accuracy of a model.
+The `codebook_features/train_toy_model.py` script provides an algorithmic sequence modeling task to analyse the codebook models. The task is to predict the next element in a sequence of numbers generated using a Finite State Machine (FSM). The `train_toy_model/ToyGraph` class defines the FSM by taking in the number of states through `N`, the number of outbound edges from each state through `edges`, and the base in which to represent the state using `representation_base`. The `train_toy_model/ToyDataset` class defines an iterable torch dataset using the FSM that generates the dataset on the fly. The `train_toy_model/ToyModelTrainer` provides additional logging feature specific to the toy example like logging the transition accuracy of a model.
 
 The `codebook_features/train_toy_model.py` script can be used to train a codebook model on the toy dataset. The syntax for the arguments and training procedure is similar to the `train_codebook.py` script. The default arguments for the training script is available in `codebook_features/config/toy_main.yaml`.
 
@@ -64,8 +71,11 @@ The `codebook_features/train_toy_model.py` script can be used to train a codeboo
 
 For tutorials on how to use the library, please see the [Codebook Features Tutorials]().
 
+</details>
 
-## Citations (BibTeX)
+
+
+## BibTeX Citation
 
 ```
 @misc{codebookfeatures,
