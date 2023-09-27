@@ -46,7 +46,6 @@ select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
     "F",  # pyflakes
-    # "I",  # isort
     "C",  # flake8-comprehensions
     "B",  # flake8-bugbear
     "BLE", # flake8-blind-except
@@ -66,10 +65,16 @@ extend-ignore = [
     "D409",
     "D413",
 ]
+exclude = [
+    "tl_mods.py",
+    "run_clm.py",
+    "mod_model_classes.py",
+]
 
 [tool.mypy]
 ignore_missing_imports = true
 exclude = [
-    "run_clm\\.py$",
-    "mod_model_classes\\.py$",
+    "tl_mods.py",
+    "run_clm.py",
+    "mod_model_classes.py",
 ]
