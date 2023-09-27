@@ -14,7 +14,7 @@ from torch import nn
 from tqdm import tqdm
 from transformer_lens.hook_points import HookPoint
 
-from codebook_features import mod_model_classes, tl_mods
+from codebook_features import mod_model_classes, tl_mods, utils
 
 try:
     import faiss
@@ -735,7 +735,7 @@ class GroupCodebookLayer(nn.Module):
                 CodebookLayer(
                     dim=dim // num_codebooks,
                     num_codes=num_codes,
-                    key=key + f"_ccb{i}",
+                    key=key + f"_gcb{i}",
                     kmeans_init=kmeans_init,
                     soft_snap=soft_snap,
                     snap_fn=snap_fn,
@@ -1221,7 +1221,11 @@ class CodebookModelConfig(transformers.PretrainedConfig):
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):
-    """ABC for a model containing codebook features."""
+    """ABC for a model containing codebook features.
+
+    Logging metrics is disabled by default for maximum performance. To enable logging,
+    use the `enable_logging` method after loading the codebook model.
+    """
 
     config_class = CodebookModelConfig
 
@@ -1270,18 +1274,21 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
-        """Create a codebook model from pretrained model."""
+        """Load a pretrained codebook model."""
         model = super().from_pretrained(*args, **kwargs)
-        for codebooks in model.all_codebooks.values():
-            for codebook in codebooks:
+        for codebooks_dict in model.all_codebooks.values():
+            for codebook in codebooks_dict.values():
                 codebook.normalize_L2()
         return model
 
     def use_faiss(self, device=None):
-        """Use faiss for code search."""
+        """Use FAISS to more efficiently find the top_k codes in each codebook.
+
+        https://github.com/facebookresearch/faiss
+        """
         assert faiss is not None, "faiss is not installed."
-        for codebooks in self.all_codebooks.values():
-            for codebook in codebooks:
+        for codebooks_dict in self.all_codebooks.values():
+            for codebook in codebooks_dict.values():
                 codebook.use_faiss(device)
 
     def init_codebook_classes(self):
@@ -1335,9 +1342,16 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def all_codebooks(self):
         """Get a dictionary of layer idx to all codebooks in that layer."""
         return {
-            k: [v.codebook_layer for v in vl]
-            for k, vl in self.all_codebook_wrappers.items()
+            k: {kp: v.codebook_layer for kp, v in vd.items()}
+            for k, vd in self.all_codebook_wrappers.items()
         }
+
+    def get_codebook(self, info: utils.CodeInfo):
+        """Get the codebook for the given CodeInfo object."""
+        codebook = self.all_codebooks[info.layer][info.cb_at]
+        if info.head is not None:  # grouped codebook
+            codebook = codebook.codebook[info.head]
+        return codebook
 
     def add_codebooks(self):
         """Add codebooks for the layers that are to be snapped."""
@@ -1353,12 +1367,14 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         layers = self.layers()
         for i in range(len(layers)):
             if i in self.config.layers_to_snap:
-                codebooks_in_layer = []
+                codebooks_in_layer = {}
                 for i_cb, cb_at in enumerate(self.config.codebook_at):
-                    method_name = CODEBOOK_METHODS.get(cb_at)
-                    if method_name is not None:
-                        method = getattr(self, method_name)
-                        method(layers, i, codebooks_in_layer, i_cb)
+                    codebook_method = CODEBOOK_METHODS.get(cb_at)
+                    if codebook_method is not None:
+                        method = getattr(self, codebook_method)
+                        codebooks_in_layer[cb_at] = method(
+                            layers, i, codebooks_in_layer, i_cb
+                        )
 
                 if not codebooks_in_layer:
                     raise ValueError(
@@ -1384,7 +1400,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.codebook_params += list(
             layers[i].codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(layers[i])
+        return layers[i]
 
     def codebook_at_mlp(self, layers, i, codebooks_in_layer, i_cb):
         """Add codebook at output of the MLP layer."""
@@ -1405,7 +1421,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.codebook_params += list(
             wrapped_mlp.codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(wrapped_mlp)
+        return wrapped_mlp
 
     def codebook_at_mlp_mid(self, layers, i, codebooks_in_layer, i_cb):
         """Add codebook at the hidden layer of MLP."""
@@ -1427,7 +1443,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.codebook_params += list(
             wrapped_hidden_layer.codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(wrapped_hidden_layer)
+        return wrapped_hidden_layer
 
     def codebook_at_qkv(self, layers, i, codebooks_in_layer, i_cb):
         """Add a separate codebook at each of the q, k, v layers."""
@@ -1450,7 +1466,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.codebook_params += list(
             wrapped_hidden_layer.codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(wrapped_hidden_layer)
+        return wrapped_hidden_layer
 
     def codebook_at_attention(self, layers, i, codebooks_in_layer, i_cb):
         """Add codebook at the output of the attention layer."""
@@ -1471,7 +1487,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         self.codebook_params += list(
             wrapped_attn.codebook_layer.codebook.parameters(),
         )
-        codebooks_in_layer.append(wrapped_attn)
+        return wrapped_attn
 
     def codebook_at_preprojection_attn(self, layers, i, codebooks_in_layer, i_cb):
         """Add codebook at the attention layer before the output is projected to the residual stream."""
@@ -1502,7 +1518,6 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             layer_idx=i,
             codebook_layer=codebook,
         )
-        codebooks_in_layer.append(new_block)
         self.codebook_params += list(codebook.parameters())
         if "." in self.attention_key:
             attn_key = self.attention_key.split(".")
@@ -1519,6 +1534,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 layers[i].__getattr__(self.attention_key).state_dict(), strict=False
             )
             layers[i].__setattr__(self.attention_key, new_block)
+        return new_block
 
     def codebook_at_attention_plus_mlp(self, layers, i, codebooks_in_layer, i_cb):
         """Add codebook on the summed output of attention and MLP layers."""
@@ -1538,30 +1554,30 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             i,
             codebook,
         )
-        codebooks_in_layer.append(pre_res_block)
         self.codebook_params += list(codebook.parameters())
         pre_res_block.load_state_dict(layers[i].state_dict(), strict=False)
         layers[i] = pre_res_block
+        return pre_res_block
 
     def reset_codebook_metrics(self):
-        """Reset the metrics stored of the codebooks."""
-        for i, layers in self.all_codebooks.items():
+        """Reset the metrics stored in the codebooks."""
+        for i, codebooks_dict in self.all_codebooks.items():
             assert i in self.config.layers_to_snap
-            for layer in layers:
-                layer.reset_metrics()
+            for codebook in codebooks_dict.values():
+                codebook.reset_metrics()
 
     def enable_codebooks(self):
-        """Enable the use of codebooks in all the layers to snap."""
-        for i, layers in self.all_codebook_wrappers.items():
+        """Enable the codebooks for all layers in self.config.layers_to_snap."""
+        for i, layers_dict in self.all_codebook_wrappers.items():
             assert i in self.config.layers_to_snap
-            for layer in layers:
+            for layer in layers_dict.values():
                 layer.snap = True
 
     def disable_codebooks(self):
         """Disable the use of codebooks in all the layers."""
-        for i, layers in self.all_codebook_wrappers.items():
+        for i, layers_dict in self.all_codebook_wrappers.items():
             assert i in self.config.layers_to_snap
-            for layer in layers:
+            for layer in layers_dict.values():
                 layer.snap = False
 
     def get_codebook_params(self):
@@ -1581,12 +1597,12 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             if isinstance(idx, int):
                 idx = [idx]
             for i in idx:
-                layers = self.all_codebooks[i]
+                layers = self.all_codebooks[i].values()
                 for layer in layers:
                     layer.set_hook_kwargs(**kwargs)
             return
         for _i, layers in self.all_codebooks.items():
-            for layer in layers:
+            for layer in layers.values():
                 layer.set_hook_kwargs(**kwargs)
 
     def disable_codes(self, codes: Union[Sequence[int], int], idx=None):
@@ -1599,35 +1615,35 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                 idx = [idx]
             for i in idx:
                 layers = self.all_codebooks[i]
-                for layer in layers:
+                for layer in layers.values():
                     layer.disable_codes(codes)
             return
         for _i, layers in self.all_codebooks.items():
-            for layer in layers:
+            for layer in layers.values():
                 layer.disable_codes(codes)
 
     def reset_hook_kwargs(self, idx=None):
         """Reset the hook kwargs for the codebook layers in `idx`."""
         if idx is not None:
-            for layer in list(self.all_codebooks.values())[idx]:
+            for layer in list(self.all_codebooks.values())[idx].values():
                 layer.reset_hook_kwargs()
             return
         for _i, layers in self.all_codebooks.items():
-            for layer in layers:
+            for layer in layers.values():
                 layer.reset_hook_kwargs()
 
     def set_hook_fn(self, hook_fn: Callable):
         """Set the hook function to be called after every forward pass of every codebook layer."""
         for i, layers in self.all_codebooks.items():
             assert i in self.config.layers_to_snap
-            for layer in layers:
+            for layer in layers.values():
                 layer.set_hook_fn(hook_fn)
 
     def get_triggered_codes(self):
         """Get the codes triggered in the last forward pass."""
         triggered_codes = []
         for _i, layers in self.all_codebooks.items():
-            for layer in layers:
+            for layer in layers.values():
                 triggered_codes.append(layer.get_triggered_codes())
         triggered_codes = torch.cat(triggered_codes, dim=0)
         assert triggered_codes.shape[1] * self.config.num_codebooks == self.d_model
@@ -1697,21 +1713,21 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
     def partial_fit_codebook(self):
         """Fit the codebook to the data stored in the codebook layer."""
         for codebooks in self.all_codebooks.values():
-            for codebook in codebooks:
+            for codebook in codebooks.values():
                 codebook.partial_fit_codebook()
 
     def enable_logging(self):
         """Enable logging for all the codebooks."""
         self.logging = True
         for codebooks in self.all_codebooks.values():
-            for codebook in codebooks:
+            for codebook in codebooks.values():
                 codebook.enable_logging()
 
     def disable_logging(self):
         """Disable logging for all the codebooks."""
         self.logging = False
         for codebooks in self.all_codebooks.values():
-            for codebook in codebooks:
+            for codebook in codebooks.values():
                 codebook.disable_logging()
 
     def replace_codes(self):
@@ -1719,7 +1735,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         total_replaced_codes = 0
         for codebooks in self.all_codebooks.values():
             avg_replaced_codes = 0
-            for codebook in codebooks:
+            for codebook in codebooks.values():
                 avg_replaced_codes += codebook.replace_codes()
             avg_replaced_codes /= len(codebooks)
             total_replaced_codes += avg_replaced_codes
@@ -2167,7 +2183,7 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs=None):
     return cb_model
 
 
-def convert_to_hooked_model_for_toy(
+def convert_to_hooked_model_for_tokfsm(
     model_path,
     orig_cb_model,
     config,

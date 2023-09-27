@@ -76,30 +76,35 @@ class CodebookTrainer(transformers.Trainer):
             all_codebooks = self.model.all_codebooks
             overall_dead_code_count, dead_code_count, total_codes = 0, 0, 0
             max_norm, mean_norm = 0, 0
-            for codebook_idx, codebooks in all_codebooks.items():
+            for codebook_idx, codebooks_dict in all_codebooks.items():
                 dead_code_count = 0
-                for codebook in codebooks:
+                for codebook in codebooks_dict.values():
                     dead_code_count += codebook.num_codes - codebook.active_codes
-                layer_codes = sum(codebook.num_codes for codebook in codebooks)
+                layer_codes = sum(
+                    codebook.num_codes for codebook in codebooks_dict.values()
+                )
                 if layer_codes:
                     logs[metric_prefix + f"dead_code_fraction/layer{codebook_idx}"] = (
                         dead_code_count / layer_codes
                     )
                     logs[metric_prefix + f"MSE/layer{codebook_idx}"] = sum(
-                        codebook.reconstruction_mse for codebook in codebooks
-                    ) / len(codebooks)
+                        codebook.reconstruction_mse
+                        for codebook in codebooks_dict.values()
+                    ) / len(codebooks_dict)
                     logs[metric_prefix + f"input_norm/layer{codebook_idx}"] = sum(
-                        codebook.input_norm for codebook in codebooks
-                    ) / len(codebooks)
+                        codebook.input_norm for codebook in codebooks_dict.values()
+                    ) / len(codebooks_dict)
                     logs[metric_prefix + f"output_norm/layer{codebook_idx}"] = sum(
-                        codebook.output_norm for codebook in codebooks
-                    ) / len(codebooks)
+                        codebook.output_norm for codebook in codebooks_dict.values()
+                    ) / len(codebooks_dict)
                     layer_mean_norm = sum(
-                        codebook.avg_norm() for codebook in codebooks
-                    ) / len(codebooks)
+                        codebook.avg_norm() for codebook in codebooks_dict.values()
+                    ) / len(codebooks_dict)
                     if metric_prefix == "eval_":
                         continue
-                    layer_max_norm = max(codebook.max_norm() for codebook in codebooks)
+                    layer_max_norm = max(
+                        codebook.max_norm() for codebook in codebooks_dict.values()
+                    )
                     logs[
                         metric_prefix + f"mean_norm/layer{codebook_idx}"
                     ] = layer_mean_norm
@@ -169,9 +174,14 @@ class WandbCallback(transformers.integrations.WandbCallback):
                 logs.pop(metric_prefix + f"code_weights/layer{codebook_idx}")
 
     def log_code_counts_and_weight_distribution(self, logs, model, metric_prefix):
-        """Log the code activation plot and also the weight distribution of the most common codebook feature."""
-        for codebook_idx, codebooks in model.all_codebooks.items():
-            counts = codebooks[0].most_common_counts()
+        """Log the code activation plot and also the weight distribution of the most common codebook feature.
+
+        Running this logging function can be expensive and slow down training. So, it is recommended to run this only
+        for debugging purposes.
+        """
+        for codebook_idx, codebooks_dict in model.all_codebooks.items():
+            first_codebook = list(codebooks_dict.values())[0]
+            counts = first_codebook.most_common_counts()
             counts = np.stack([np.arange(counts.size), counts], axis=1)
             counts = wandb.Table(
                 data=counts,
@@ -185,7 +195,7 @@ class WandbCallback(transformers.integrations.WandbCallback):
             if metric_prefix == "eval_":
                 continue
             weight_table = wandb.Table(
-                data=codebooks[0].get_most_used_code().reshape(-1, 1),
+                data=first_codebook.get_most_used_code().reshape(-1, 1),
                 columns=["weight"],
             )
             logs[
