@@ -1221,7 +1221,11 @@ class CodebookModelConfig(transformers.PretrainedConfig):
 
 
 class CodebookModel(transformers.PreTrainedModel, abc.ABC):
-    """ABC for a model containing codebook features."""
+    """ABC for a model containing codebook features.
+
+    Logging metrics is disabled by default for maximum performance. To enable logging,
+    use the `enable_logging` method after loading the codebook model.
+    """
 
     config_class = CodebookModelConfig
 
@@ -1270,7 +1274,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
-        """Create a codebook model from pretrained model."""
+        """Load a pretrained codebook model."""
         model = super().from_pretrained(*args, **kwargs)
         for codebooks_dict in model.all_codebooks.values():
             for codebook in codebooks_dict.values():
@@ -1278,7 +1282,10 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         return model
 
     def use_faiss(self, device=None):
-        """Use faiss for code search."""
+        """Use FAISS to more efficiently find the top_k codes in each codebook.
+
+        https://github.com/facebookresearch/faiss
+        """
         assert faiss is not None, "faiss is not installed."
         for codebooks_dict in self.all_codebooks.values():
             for codebook in codebooks_dict.values():
@@ -1340,7 +1347,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         }
 
     def get_codebook(self, info: utils.CodeInfo):
-        """Get the codebook for the given code info."""
+        """Get the codebook for the given CodeInfo object."""
         codebook = self.all_codebooks[info.layer][info.cb_at]
         if info.head is not None:  # grouped codebook
             codebook = codebook.codebook[info.head]
@@ -1362,9 +1369,9 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             if i in self.config.layers_to_snap:
                 codebooks_in_layer = {}
                 for i_cb, cb_at in enumerate(self.config.codebook_at):
-                    method_name = CODEBOOK_METHODS.get(cb_at)
-                    if method_name is not None:
-                        method = getattr(self, method_name)
+                    codebook_method = CODEBOOK_METHODS.get(cb_at)
+                    if codebook_method is not None:
+                        method = getattr(self, codebook_method)
                         codebooks_in_layer[cb_at] = method(
                             layers, i, codebooks_in_layer, i_cb
                         )
@@ -1553,14 +1560,14 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         return pre_res_block
 
     def reset_codebook_metrics(self):
-        """Reset the metrics stored of the codebooks."""
+        """Reset the metrics stored in the codebooks."""
         for i, codebooks_dict in self.all_codebooks.items():
             assert i in self.config.layers_to_snap
             for codebook in codebooks_dict.values():
                 codebook.reset_metrics()
 
     def enable_codebooks(self):
-        """Enable the use of codebooks in all the layers to snap."""
+        """Enable the codebooks for all layers in self.config.layers_to_snap."""
         for i, layers_dict in self.all_codebook_wrappers.items():
             assert i in self.config.layers_to_snap
             for layer in layers_dict.values():

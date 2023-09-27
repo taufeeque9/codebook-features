@@ -157,7 +157,7 @@ class ToyGraph:
         )
 
     def generate_trajectory(self, length):
-        """Generate a trajectory of a given length."""
+        """Generate a trajectory of a given length starting from a random state."""
         trajectory = [self.rng.choice(self.N)]
         for _ in range(length - 1):
             trajectory.append(self.step_with(trajectory[-1]))
@@ -402,7 +402,7 @@ def load_model(config_args, cfg_dict):
     return model
 
 
-@hydra.main(config_path="config", config_name="toy_main")
+@hydra.main(config_path="config", config_name="toy_main", version_base=None)
 def main(cfg):
     """Train codebook based models parametrized using hydra.
 

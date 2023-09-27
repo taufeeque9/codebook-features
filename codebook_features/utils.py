@@ -394,7 +394,11 @@ def run_model_fn_with_codes(
     fn_kwargs=None,
     list_of_code_infos=(),
 ):
-    """Model's generation with the codebook features patched in."""
+    """Run the `cb_model`'s `fn_name` method while activating the codes in `list_of_code_infos`.
+
+    Common use case includes running the `run_with_cache` method while activating the codes.
+    For running the `generate` method, use `generate_with_codes` instead.
+    """
     if fn_kwargs is None:
         fn_kwargs = {}
     hook_fns = [
@@ -418,7 +422,7 @@ def generate_with_codes(
     automata=None,
     generate_kwargs=None,
 ):
-    """Model's generation with the codebook features patched in."""
+    """Sample from the language model while activating the codes in `list_of_code_infos`."""
     gen = run_model_fn_with_codes(
         input,
         cb_model,
@@ -517,7 +521,10 @@ def parse_topic_codes_string(
 
 
 def find_similar_codes(cb_model, code_info, n=8):
-    """Find the n most similar codes to the given code."""
+    """Find the `n` most similar codes to the given code using cosine similarity.
+
+    Useful for finding related codes for interpretability.
+    """
     codebook = cb_model.get_codebook(code_info)
     device = codebook.weight.device
     code = codebook(torch.tensor(code_info.code).to(device))
