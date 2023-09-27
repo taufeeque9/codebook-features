@@ -6,7 +6,7 @@ import pytest
 import torch
 import transformers
 
-from codebook_features import models, run_clm, train_codebook, train_toy_model
+from codebook_features import models, run_clm, train_codebook, train_fsm_model
 
 
 class GradientCheckerOptimizer(torch.optim.AdamW):
@@ -34,13 +34,13 @@ def test_train_codebook(config_name):
         assert ret is not None
 
 
-def test_train_toy_codebook():
-    """Test training toy codebook script."""
+def test_train_fsm_codebook():
+    """Test training fsm codebook script."""
     with hydra.initialize_config_module(
         version_base=None, config_module="codebook_features.config"
     ):
-        cfg = hydra.compose(config_name="test_toy")
-        ret = train_toy_model.main(cfg)
+        cfg = hydra.compose(config_name="test_fsm")
+        ret = train_fsm_model.main(cfg)
         assert ret is not None
 
 

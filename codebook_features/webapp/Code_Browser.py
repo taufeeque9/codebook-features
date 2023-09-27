@@ -59,7 +59,7 @@ model_name = st.selectbox(
     key=webapp_utils.persist("model_name"),
 )
 
-is_automata = "FSM" in model_name
+is_fsm = "FSM" in model_name
 cache_path = base_cache_dir + f"{model_name}_*"
 dirs = glob.glob(cache_path)
 dirs.sort(key=os.path.getmtime)
@@ -382,7 +382,7 @@ acts, acts_count = webapp_utils.get_code_acts(
     head,
     ctx_size,
     num_examples,
-    is_automata=is_automata,
+    is_fsm=is_fsm,
 )
 
 st.write(

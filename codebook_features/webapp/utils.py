@@ -86,7 +86,7 @@ def get_code_acts(
     ctx_size=5,
     num_examples=100,
     return_example_list=False,
-    is_automata=False,
+    is_fsm=False,
 ):
     """Get the token activations for a given code."""
     ft_tkns = load_ft_tkns(model_id, layer, head, code)
@@ -99,7 +99,7 @@ def get_code_acts(
         n=ctx_size,
         max_examples=num_examples,
         return_example_list=return_example_list,
-        is_automata=is_automata,
+        is_fsm=is_fsm,
     )
     return acts[0], freqs[0]
 

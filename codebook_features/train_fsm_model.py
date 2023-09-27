@@ -1,11 +1,11 @@
-"""Train script for Toy Codebook models."""
+"""Train script for TokFSM Codebook models."""
 
 import copy
 import json
 import os
 import pathlib
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Sequence
 
 import hydra
 import numpy as np
@@ -65,8 +65,8 @@ class ModelConfigArguments:
     vocab_size: int = field(default=11)
 
 
-class ToyGraph:
-    """Toy graph that constructs an automata with N states and fixed number of edges per state."""
+class FSM:
+    """Construct a finite state machine with N states and fixed number of edges per state."""
 
     def __init__(
         self,
@@ -76,12 +76,12 @@ class ToyGraph:
         representation_base=10,
         seed=None,
     ):
-        """Initialize the automata.
+        """Initialize the fsm.
 
         Args:
-            N: number of states in the automata.
+            N: number of states in the fsm.
             edges: number of edges per state.
-            transition_matrix: transition matrix of probabilities of shape (N, N) describing the automata.
+            transition_matrix: transition matrix of probabilities of shape (N, N) describing the fsm.
                 If None, a random transition matrix is generated.
             representation_base: base of the representation of the states.
             seed: random seed for generating the transition matrix.
@@ -109,16 +109,16 @@ class ToyGraph:
         self.digits = int(np.ceil(np.emath.logn(n=representation_base, x=N)))
 
     def step(self):
-        """Step the automata."""
+        """Step the fsm."""
         self.state = self.rng.choice(self.N, p=self.transition_matrix[self.state])
         return self.state
 
-    def step_with(self, state):
-        """Step the automata from a given state."""
+    def get_step_from(self, state):
+        """Step the fsm from a given state."""
         return self.rng.choice(self.N, p=self.transition_matrix[state])
 
     def reset(self):
-        """Reset the automata to the initial state."""
+        """Reset the fsm to the initial state."""
         self.state = 0
         return self.state
 
@@ -127,14 +127,14 @@ class ToyGraph:
         self.rng = np.random.default_rng(seed=seed)
 
     def save(self, path):
-        """Save the automata to a given path."""
+        """Save the fsm to a given path."""
         path = pathlib.Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        np.save(path / "automata.npy", self.transition_matrix)
+        np.save(path / "fsm.npy", self.transition_matrix)
 
     @classmethod
     def load(cls, path, **kwargs):
-        """Load the automata from a given path."""
+        """Load the fsm from a given path."""
         transition_matrix = np.load(path)
         edges = (transition_matrix[0] != 0).sum()
         return cls(
@@ -145,22 +145,22 @@ class ToyGraph:
         )
 
     def reverse(self):
-        """Reverse the automata by creating a new copy."""
+        """Reverse the fsm by creating a new copy."""
         mtx = self.transition_matrix.T.copy()
         mtx[mtx != 0] = 1
         mtx = mtx / mtx.sum(axis=1, keepdims=True)
-        return ToyGraph(
+        return FSM(
             N=self.N,
             transition_matrix=mtx,
-            edges=None,  # num of edges are not fixed in the reversed automata
+            edges=None,  # num of edges are not fixed in the reversed fsm
             representation_base=self.representation_base,
         )
 
     def generate_trajectory(self, length):
-        """Generate a trajectory of a given length starting from a random state."""
+        """Generate a trajectory of a given length from the fsm starting from a random state."""
         trajectory = [self.rng.choice(self.N)]
         for _ in range(length - 1):
-            trajectory.append(self.step_with(trajectory[-1]))
+            trajectory.append(self.get_step_from(trajectory[-1]))
         return trajectory
 
     def generate_trajectories(self, length, start_states=None):
@@ -172,11 +172,11 @@ class ToyGraph:
         trajectories = np.zeros((len(start_states), length), dtype=np.int32)
         for i in range(length):
             for j in range(len(start_states)):
-                curr_states[j] = self.step_with(curr_states[j])
+                curr_states[j] = self.get_step_from(curr_states[j])
                 trajectories[j, i] = curr_states[j]
         return trajectories
 
-    def verify_trajectory(self, traj):
+    def is_valid_trajectory(self, traj):
         """Verify that a given trajectory is valid."""
         for i in range(len(traj) - 1):
             if self.transition_matrix[traj[i], traj[i + 1]] == 0:
@@ -185,11 +185,11 @@ class ToyGraph:
                 return False
         return True
 
-    def nbrs(self, state):
+    def get_out_neighbors(self, state):
         """Return the set of states that can be transitioned to from the given state."""
         return np.where(self.transition_matrix[state] != 0)[0]
 
-    def nbrs_to(self, state):
+    def get_in_neighbors(self, state):
         """Return the set of states that can transition to the given state."""
         return np.where(self.transition_matrix[:, state] != 0)[0]
 
@@ -198,24 +198,23 @@ class ToyGraph:
 
         Also computes the accuracy of the first transition across the trajectories.
         """
-        correct_transitions, correct_first_transitions, total_transitions = 0, 0, 0
+        correct_transitions = correct_first_transitions = total_transitions = 0
         for traj in trajs:
+            assert len(traj) > 1
             total_transitions += len(traj) - 1
             for i in range(len(traj) - 1):
                 if self.transition_matrix[traj[i], traj[i + 1]] != 0:
                     correct_transitions += 1
                     if i == 0:
                         correct_first_transitions += 1
-        if len(traj) > 1:
-            return (
-                correct_transitions / total_transitions,
-                correct_first_transitions / len(trajs),
-            )
-        else:
-            return 0, 0
+
+        return (
+            correct_transitions / total_transitions,
+            correct_first_transitions / len(trajs),
+        )
 
     def seq_to_traj(self, sequences):
-        """Convert a sequence of digits to a trajectory."""
+        """Convert a sequence of digits to a trajectory of states."""
         if isinstance(sequences, str):
             sequences = [sequences]
         trajs = []
@@ -230,7 +229,7 @@ class ToyGraph:
         return trajs
 
     def traj_to_str(self, traj):
-        """Convert a trajectory to a string of digits."""
+        """Convert a trajectory of states to a string of digits."""
         return "".join([self.token_repr(x) for x in traj])
 
     def token_repr(self, state):
@@ -241,37 +240,44 @@ class ToyGraph:
         return "0" * (self.digits - len(n_ary_repr)) + n_ary_repr
 
 
-class ToyDataset(IterableDataset):
-    """Dataset for generating trajectories from a given automata."""
+class TokFSMDataset(IterableDataset):
+    """Dataset for generating trajectories from a given FSM object."""
 
-    def __init__(self, graph, tokenizer, seq_len, max_samples=-1, save_tokens=False):
+    def __init__(
+        self,
+        fsm: FSM,
+        tokenizer,
+        seq_len: int,
+        max_samples: int = -1,
+        save_tokens: bool = False,
+    ):
         """Initialize the dataset.
 
         Args:
-            graph: The automata to generate trajectories from.
+            fsm: The FSM object to generate trajectories from.
             tokenizer: The tokenizer to use.
             seq_len: The length of the trajectories to generate.
             max_samples: The maximum number of samples to generate.
             save_tokens: Whether to save the tokens generated.
         """
-        self.graph = graph
+        self.fsm = fsm
         self.tokenizer = tokenizer
         self.seq_len = seq_len
         self.max_samples = max_samples
         self.save_tokens = save_tokens
-        self.tokens = []
-        assert self.seq_len % self.graph.digits == 0
+        self.tokens: Sequence = []
+        assert self.seq_len % self.fsm.digits == 0
 
     def __iter__(self):
         """Generate a tokenized trajectory."""
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is not None:
-            self.graph.set_seed(worker_info.seed)
+            self.fsm.set_seed(worker_info.seed)
         i = 0
         while self.max_samples == -1 or i < self.max_samples:
             i += 1
             token_dict = self.tokenize(
-                self.graph.generate_trajectory(self.seq_len // self.graph.digits)
+                self.fsm.generate_trajectory(self.seq_len // self.fsm.digits)
             )
             if self.save_tokens:
                 self.tokens.append(token_dict["input_ids"])
@@ -279,7 +285,7 @@ class ToyDataset(IterableDataset):
 
     def tokenize(self, traj):
         """Convert a trajectory to a tokenized input."""
-        inp_str = self.graph.traj_to_str(traj)
+        inp_str = self.fsm.traj_to_str(traj)
         inp_dict = {
             k: v.reshape(-1)
             for k, v in self.tokenizer(inp_str, return_tensors="pt").items()
@@ -295,24 +301,24 @@ class ToyDataset(IterableDataset):
         return inp_dict
 
 
-class ToyModelTrainer(cb_trainer.CodebookTrainer):
-    """Trainer for the toy model."""
+class TokFSMModelTrainer(cb_trainer.CodebookTrainer):
+    """Trainer for the FSM model."""
 
-    def __init__(self, toy_graph, gen_seq_len, *args, **kwargs):
+    def __init__(self, fsm, gen_seq_len, *args, **kwargs):
         """Initialize the trainer.
 
         Args:
-            toy_graph: The automata to generate trajectories from.
+            fsm: The FSM object to generate trajectories from.
             gen_seq_len: The length of the trajectories to generate.
             args: Arguments to pass to the base trainer.
             kwargs: Keyword arguments to pass to the base trainer.
         """
         super().__init__(*args, **kwargs)
-        self.toy_graph = toy_graph
+        self.fsm = fsm
         self.gen_seq_len = gen_seq_len
 
     def log(self, logs) -> None:
-        """Additional metrics to log for the toy model.
+        """Additional metrics to log for the FSM model.
 
         Logs the transition accuracy of the generated trajectories.
         """
@@ -325,15 +331,15 @@ class ToyModelTrainer(cb_trainer.CodebookTrainer):
                 do_sample=True,
             )
             gen_seq = [self.tokenizer.decode(gen_seq[i]) for i in range(len(gen_seq))]
-            traj = self.toy_graph.seq_to_traj(gen_seq)
-            ov_trans_acc, first_trans_acc = self.toy_graph.transition_accuracy(traj)
+            traj = self.fsm.seq_to_traj(gen_seq)
+            ov_trans_acc, first_trans_acc = self.fsm.transition_accuracy(traj)
             logs[f"{metric_prefix}transition_accuracy"] = ov_trans_acc
             logs[f"{metric_prefix}first_transition_accuracy"] = first_trans_acc
         super().log(logs)
 
 
 def create_tokenizer(path, vocab_size):
-    """Create a tokenizer for the toy model."""
+    """Create a tokenizer for the FSM model."""
     path = pathlib.Path(path)
     if not path.exists():
         path.mkdir()
@@ -402,7 +408,7 @@ def load_model(config_args, cfg_dict):
     return model
 
 
-@hydra.main(config_path="config", config_name="toy_main", version_base=None)
+@hydra.main(config_path="config", config_name="fsm_main", version_base=None)
 def main(cfg):
     """Train codebook based models parametrized using hydra.
 
@@ -426,34 +432,32 @@ def main(cfg):
         **(cfg_dict["training_args"]),
         local_rank=int(os.environ.get("LOCAL_RANK", -1)),
     )
-    model_args = run_clm.ModelArguments(model_name_or_path="toy/model")
+    model_args = run_clm.ModelArguments(model_name_or_path="tokfsm/model")
     config_args = ModelConfigArguments(**cfg.model_config_args)
     data_args = run_clm.DataTrainingArguments(
-        dataset_name="toy_graph", max_eval_samples=2048
+        dataset_name="tokfsm", max_eval_samples=2048
     )
 
-    if cfg.toy_dataset_args.path is None:
-        automata = ToyGraph(
-            N=cfg.toy_dataset_args.num_states,
-            edges=cfg.toy_dataset_args.num_edges,
-            seed=cfg.toy_dataset_args.seed,
+    if cfg.fsm_dataset_args.path is None:
+        fsm = FSM(
+            N=cfg.fsm_dataset_args.num_states,
+            edges=cfg.fsm_dataset_args.num_edges,
+            seed=cfg.fsm_dataset_args.seed,
             representation_base=config_args.vocab_size - 1,
         )
     else:
-        automata = ToyGraph.load(
-            cfg.toy_dataset_args.path,
-            seed=cfg.toy_dataset_args.seed,
+        fsm = FSM.load(
+            cfg.fsm_dataset_args.path,
+            seed=cfg.fsm_dataset_args.seed,
             representation_base=config_args.vocab_size - 1,
         )
-    tokenizer = create_tokenizer("toy/", config_args.vocab_size)
-    train_dataset = ToyDataset(
-        automata, tokenizer=tokenizer, seq_len=config_args.seq_len
-    )
-    eval_dataset = ToyDataset(
-        automata,
+    tokenizer = create_tokenizer("tokfsm/", config_args.vocab_size)
+    train_dataset = TokFSMDataset(fsm, tokenizer=tokenizer, seq_len=config_args.seq_len)
+    eval_dataset = TokFSMDataset(
+        fsm,
         tokenizer=tokenizer,
         seq_len=config_args.seq_len,
-        max_samples=cfg.toy_dataset_args.max_eval_samples,
+        max_samples=cfg.fsm_dataset_args.max_eval_samples,
     )
 
     model = load_model(config_args, cfg_dict)
@@ -488,7 +492,7 @@ def main(cfg):
     wandb_initilized = False
     if training_args.local_rank <= 0 and "wandb" in training_args.report_to:
         wandb.init(
-            project="toy_graph",
+            project="tokfsm",
             name=training_args.run_name,
             tags=tags,
             settings=wandb.Settings(code_dir="."),
@@ -498,8 +502,8 @@ def main(cfg):
 
     callbacks = [cb_trainer.WandbCallback()] if wandb_initilized else []
 
-    trainer = ToyModelTrainer(
-        toy_graph=automata,
+    trainer = TokFSMModelTrainer(
+        fsm=fsm,
         gen_seq_len=config_args.seq_len,
         model=model,
         tokenizer=tokenizer,
@@ -511,7 +515,7 @@ def main(cfg):
         optimizers=optimizers,
         callbacks=callbacks,
     )
-    automata.save("toy")
+    fsm.save("tokfsm/")
 
     lm_datasets = {"train": train_dataset, "validation": eval_dataset}
     metrics = run_clm.run_trainer(

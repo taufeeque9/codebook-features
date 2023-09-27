@@ -1,6 +1,6 @@
 training_args:
-  run_name: test_toy_model
-  output_dir: output_toy_test
+  run_name: test_fsm_model
+  output_dir: output_fsm_test
   overwrite_output_dir: True
   do_train: True
   do_eval: True
@@ -38,7 +38,7 @@ codebook_args:
 
 k_scheduler_kwargs: null
 
-toy_dataset_args:
+fsm_dataset_args:
   path: null
   num_states: 4
   num_edges: 1
@@ -62,4 +62,4 @@ wandb_charts: False
 pretrained_path: null
 get_baseline: False
 tag_keys: [codebook_type, num_codebooks, k_codebook, loss]
-tags: ["test_toy"]
+tags: ["test_fsm"]

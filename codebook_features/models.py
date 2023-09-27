@@ -2183,7 +2183,7 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs=None):
     return cb_model
 
 
-def convert_to_hooked_model_for_toy(
+def convert_to_hooked_model_for_tokfsm(
     model_path,
     orig_cb_model,
     config,
