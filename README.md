@@ -36,7 +36,7 @@ python -m streamlit run codebook_features/webapp/Code_Browser.py -- --cache_dir 
 
 ### Code Intervention
 
-To control a network, one can _intervene_ on codes by causing them to always be activated during the forward pass. This can be useful to influence the sampled generations, e.g., to cause the network to discuss certain topics. For a general tutorial on using codebook models and seeing how you can perform code intervention, please see the [Code Intervention Tutorial]().
+To control a network, one can _intervene_ on codes by causing them to always be activated during the forward pass. This can be useful to influence the sampled generations, e.g., to cause the network to discuss certain topics. For a general tutorial on using codebook models and seeing how you can perform code intervention, please see the [Code Intervention Tutorial](https://github.com/alextamkin/codebook-features/blob/main/tutorials/code_intervention.ipynb).
 
 
 <details>
@@ -69,7 +69,7 @@ The `codebook_features/train_fsm_model.py` script can be used to train a codeboo
 
 
 
-For tutorials on how to use the library, please see the [Codebook Features Tutorials]().
+For tutorials on how to use the library, please see the [Codebook Features Tutorials](https://github.com/alextamkin/codebook-features/tree/main/tutorials).
 
 </details>
 
