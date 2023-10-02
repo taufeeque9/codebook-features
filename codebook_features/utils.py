@@ -356,52 +356,13 @@ def patch_in_codes(run_cb_ids, hook, pos, code, code_pos=None):
     return run_cb_ids
 
 
-def get_cb_layer_name(cb_at, layer_idx, head_idx=None):
+def get_cb_hook_key(cb_at: str, layer_idx: int, gcb_idx: Optional[int] = None):
     """Get the layer name used to store hooks/cache."""
-    if head_idx is None:
-        return f"blocks.{layer_idx}.{cb_at}.codebook_layer.hook_codebook_ids"
+    comp_name = "attn" if "attn" in cb_at else "mlp"
+    if gcb_idx is None:
+        return f"blocks.{layer_idx}.{comp_name}.codebook_layer.hook_codebook_ids"
     else:
-        return f"blocks.{layer_idx}.{cb_at}.codebook_layer.codebook.{head_idx}.hook_codebook_ids"
-
-
-def get_cb_layer_names(layer, patch_types, n_heads):
-    """Get the layer names used to store hooks/cache."""
-    layer_names = []
-    attn_added, mlp_added = False, False
-    if "attn_out" in patch_types:
-        attn_added = True
-        for head in range(n_heads):
-            layer_names.append(
-                f"blocks.{layer}.attn.codebook_layer.codebook.{head}.hook_codebook_ids"
-            )
-    if "mlp_out" in patch_types:
-        mlp_added = True
-        layer_names.append(f"blocks.{layer}.mlp.codebook_layer.hook_codebook_ids")
-
-    for patch_type in patch_types:
-        # match patch_type of the pattern attn_\d_head_\d
-        attn_head = re.match(r"attn_(\d)_head_(\d)", patch_type)
-        if (not attn_added) and attn_head and attn_head[1] == str(layer):
-            layer_names.append(
-                f"blocks.{layer}.attn.codebook_layer.codebook.{attn_head[2]}.hook_codebook_ids"
-            )
-        mlp = re.match(r"mlp_(\d)", patch_type)
-        if (not mlp_added) and mlp and mlp[1] == str(layer):
-            layer_names.append(f"blocks.{layer}.mlp.codebook_layer.hook_codebook_ids")
-
-    return layer_names
-
-
-def cb_layer_name_to_info(layer_name):
-    """Get the layer info from the layer name."""
-    layer_name_split = layer_name.split(".")
-    layer_idx = int(layer_name_split[1])
-    cb_at = layer_name_split[2]
-    if cb_at == "mlp":
-        head_idx = None
-    else:
-        head_idx = int(layer_name_split[5])
-    return cb_at, layer_idx, head_idx
+        return f"blocks.{layer_idx}.{comp_name}.codebook_layer.codebook.{gcb_idx}.hook_codebook_ids"
 
 
 def run_model_fn_with_codes(
@@ -423,7 +384,7 @@ def run_model_fn_with_codes(
         for tupl in list_of_code_infos
     ]
     fwd_hooks = [
-        (get_cb_layer_name(tupl.cb_at, tupl.layer, tupl.head), hook_fns[i])
+        (get_cb_hook_key(tupl.cb_at, tupl.layer, tupl.head), hook_fns[i])
         for i, tupl in enumerate(list_of_code_infos)
     ]
     cb_model.reset_hook_kwargs()
@@ -476,6 +437,19 @@ def JSD(logits1, logits2, pos=-1, reduction="batchmean"):
     return 0.5 * loss
 
 
+def cb_hook_key_to_info(layer_hook_key: str):
+    """Get the layer info from the layer name."""
+    layer_search = re.search(r"blocks\.(\d+)\.(\w+)\.", layer_hook_key)
+    assert layer_search is not None
+    layer_idx, comp_name = int(layer_search.group(1)), layer_search.group(2)
+    gcb_idx_search = re.search(r"codebook\.(\d+)", layer_hook_key)
+    if gcb_idx_search is not None:
+        gcb_idx = int(gcb_idx_search.group(1))
+    else:
+        gcb_idx = None
+    return comp_name, layer_idx, gcb_idx
+
+
 def find_code_changes(cache1, cache2, pos=None):
     """Find the codebook codes that are different between the two caches."""
     for k in cache1.keys():
@@ -483,8 +457,8 @@ def find_code_changes(cache1, cache2, pos=None):
             c1 = cache1[k][0, pos]
             c2 = cache2[k][0, pos]
             if not torch.all(c1 == c2):
-                print(cb_layer_name_to_info(k), c1.tolist(), c2.tolist())
-                print(cb_layer_name_to_info(k), c1.tolist(), c2.tolist())
+                print(cb_hook_key_to_info(k), c1.tolist(), c2.tolist())
+                print(cb_hook_key_to_info(k), c1.tolist(), c2.tolist())
 
 
 def common_codes_in_cache(cache_codes, threshold=0.0):

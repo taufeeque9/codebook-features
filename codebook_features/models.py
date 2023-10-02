@@ -1272,15 +1272,6 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             "This shouldn't get executed as forward is overridden in init."
         )
 
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        """Load a pretrained codebook model."""
-        model = super().from_pretrained(*args, **kwargs)
-        for codebooks_dict in model.all_codebooks.values():
-            for codebook in codebooks_dict.values():
-                codebook.normalize_L2()
-        return model
-
     def use_faiss(self, device=None):
         """Use FAISS to more efficiently find the top_k codes in each codebook.
 
