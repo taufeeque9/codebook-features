@@ -100,15 +100,7 @@ def main():
         len(orig_cb_model.config.codebook_type) == 1
     ), "Multi-codebook per layer not supported."
 
-    cb_at_dict = {
-        "preproj_attention": "attn_preproj",
-        "transformer_block": "tb",
-        "attention": "attn",
-        "attention_and_mlp": "attn+mlp",
-    }
-
     cb_at = orig_cb_model.config.codebook_at[0]
-    cb_at = cb_at_dict.get(cb_at, cb_at)
     is_attn = "attn" in cb_at
     gcb = orig_cb_model.config.codebook_type[0] == "group"
     n_layers = orig_cb_model.num_layers()

@@ -76,7 +76,7 @@ class CodeInfo:
     @classmethod
     def from_str(cls, code_txt, *args, **kwargs):
         """Extract code info fields from string."""
-        code_txt = code_txt.strip()
+        code_txt = code_txt.strip().lower()
         code_txt = code_txt.split(", ")
         code_txt = dict(txt.split(": ") for txt in code_txt)
         return cls(*args, **code_txt, **kwargs)
@@ -477,6 +477,7 @@ def parse_topic_codes_string(
     info_str: str,
     pos: Optional[int] = None,
     code_append: Optional[bool] = False,
+    **code_info_kwargs,
 ):
     """Parse the topic codes string."""
     code_info_strs = info_str.strip().split("\n")
@@ -488,7 +489,14 @@ def parse_topic_codes_string(
     else:
         code_pos = "append" if code_append else -1
     for code_info_str in code_info_strs:
-        topic_codes.append(CodeInfo.from_str(code_info_str, pos=pos, code_pos=code_pos))
+        topic_codes.append(
+            CodeInfo.from_str(
+                code_info_str,
+                pos=pos,
+                code_pos=code_pos,
+                **code_info_kwargs,
+            )
+        )
         if code_append is None or code_append:
             continue
         if layer == topic_codes[-1].layer and head == topic_codes[-1].head:
