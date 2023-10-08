@@ -215,7 +215,8 @@ class FSM:
 
     def seq_to_traj(self, sequences):
         """Convert a sequence of digits to a trajectory of states."""
-        if isinstance(sequences, str):
+        is_single = isinstance(sequences, str)
+        if is_single:
             sequences = [sequences]
         trajs = []
         for seq in sequences:
@@ -226,6 +227,8 @@ class FSM:
                     trajs[-1].append(
                         int(seq[i : i + self.digits], base=self.representation_base)
                     )
+        if is_single:
+            return trajs[0]
         return trajs
 
     def traj_to_str(self, traj):

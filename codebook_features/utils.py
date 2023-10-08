@@ -408,7 +408,7 @@ def generate_with_codes(
         generate_kwargs,
         list_of_code_infos,
     )
-    return tokfsm.seq_to_traj(gen)[0] if tokfsm is not None else gen
+    return tokfsm.seq_to_traj(gen) if tokfsm is not None else gen
 
 
 def JSD(logits1, logits2, pos=-1, reduction="batchmean"):
@@ -438,7 +438,17 @@ def JSD(logits1, logits2, pos=-1, reduction="batchmean"):
 
 
 def cb_hook_key_to_info(layer_hook_key: str):
-    """Get the layer info from the layer name."""
+    """Get the layer info from the codebook layer hook key.
+
+    Args:
+        layer_hook_key: the hook key of the codebook layer.
+            E.g. `blocks.3.attn.codebook_layer.hook_codebook_ids`
+
+    Returns:
+        comp_name: the name of the component codebook is appied at.
+        layer_idx: the layer index.
+        gcb_idx: the codebook index if the codebook layer is grouped, otherwise None.
+    """
     layer_search = re.search(r"blocks\.(\d+)\.(\w+)\.", layer_hook_key)
     assert layer_search is not None
     layer_idx, comp_name = int(layer_search.group(1)), layer_search.group(2)
