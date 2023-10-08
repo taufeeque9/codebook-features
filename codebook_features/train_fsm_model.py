@@ -71,7 +71,7 @@ class FSM:
     def __init__(
         self,
         N: int = 100,
-        edges=10,
+        num_edges=10,
         transition_matrix=None,
         representation_base=10,
         seed=None,
@@ -80,19 +80,19 @@ class FSM:
 
         Args:
             N: number of states in the fsm.
-            edges: number of edges per state.
+            num_edges: number of edges per state.
             transition_matrix: transition matrix of probabilities of shape (N, N) describing the fsm.
                 If None, a random transition matrix is generated.
             representation_base: base of the representation of the states.
             seed: random seed for generating the transition matrix.
         """
         self.rng = np.random.default_rng(seed=seed)
-        self.edges = edges
+        self.num_edges = num_edges
         if transition_matrix is None:
             self.transition_matrix = np.zeros((N, N))
             for i in range(N):
                 self.transition_matrix[
-                    i, self.rng.choice(N, size=edges, replace=False)
+                    i, self.rng.choice(N, size=num_edges, replace=False)
                 ] = 1
             self.transition_matrix = (
                 self.transition_matrix
@@ -136,11 +136,11 @@ class FSM:
     def load(cls, path, **kwargs):
         """Load the fsm from a given path."""
         transition_matrix = np.load(path)
-        edges = (transition_matrix[0] != 0).sum()
+        num_edges = (transition_matrix[0] != 0).sum()
         return cls(
             N=transition_matrix.shape[0],
             transition_matrix=transition_matrix,
-            edges=edges,
+            num_edges=num_edges,
             **kwargs,
         )
 
@@ -152,7 +152,7 @@ class FSM:
         return FSM(
             N=self.N,
             transition_matrix=mtx,
-            edges=None,  # num of edges are not fixed in the reversed fsm
+            num_edges=None,  # num of edges are not fixed in the reversed fsm
             representation_base=self.representation_base,
         )
 
@@ -444,7 +444,7 @@ def main(cfg):
     if cfg.fsm_dataset_args.path is None:
         fsm = FSM(
             N=cfg.fsm_dataset_args.num_states,
-            edges=cfg.fsm_dataset_args.num_edges,
+            num_edges=cfg.fsm_dataset_args.num_edges,
             seed=cfg.fsm_dataset_args.seed,
             representation_base=config_args.vocab_size - 1,
         )

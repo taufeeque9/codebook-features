@@ -88,8 +88,8 @@ def get_next_state_probs(state, model, fsm, fwd_hooks=None, prepend_bos=True):
         prepend_bos: whether to prepend the bos token to the state.
 
     Returns:
-        next_state_preds: the top `edges` next state predictions for each state.
-        next_state_probs: the top `edges` next state probabilities for each state.
+        next_state_preds: the top `num_edges` next state predictions for each state.
+        next_state_probs: the top `num_edges` next state probabilities for each state.
     """
     if isinstance(state, int):
         state_str = fsm.traj_to_str([state])
@@ -119,9 +119,9 @@ def get_next_state_probs(state, model, fsm, fwd_hooks=None, prepend_bos=True):
             :, next_token * base : (next_token + 1) * base
         ] = next_state_prob
 
-    # filter next_state_probs to only include the top `edges`
+    # filter next_state_probs to only include the top `num_edges`
     next_state_probs, next_state_preds = torch.topk(
-        next_state_probs, fsm.edges, dim=-1, sorted=True
+        next_state_probs, fsm.num_edges, dim=-1, sorted=True
     )
     return next_state_preds, next_state_probs
 
@@ -159,7 +159,7 @@ def correct_next_state_probs(state, next_state_probs, fsm, print_info=""):
 
     actual_next_states = fsm.transition_matrix[state, :] > 0
     common = actual_next_states * next_states_pred.cpu().numpy()
-    accuracy = common.sum(axis=-1) / fsm.edges
+    accuracy = common.sum(axis=-1) / fsm.num_edges
     if "i" in print_info:
         incorrect_transitions = next_states_pred - common
         for i, s in enumerate(state):
