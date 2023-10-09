@@ -88,7 +88,7 @@ def compare_input_on_hooked_model(input, orig_model, hooked_model):
     assert torch.allclose(orig_output, hooked_output)
 
 
-@pytest.mark.parametrize("codebook_at", ["attention", "attn_preproj", "mlp"])
+@pytest.mark.parametrize("codebook_at", ["attn", "attn_preproj", "mlp"])
 def test_hooked_transformer_codebook_model(codebook_at):
     """Test HookedTransformerCodebookModel."""
     config = models.CodebookModelConfig(

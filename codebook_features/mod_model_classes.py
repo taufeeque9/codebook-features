@@ -389,15 +389,17 @@ class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
         query_input,
         key_input,
         value_input,
-        past_kv_cache_entry,
+        past_kv_cache_entry=None,
+        additive_attention_mask=None,
+        left_attention_mask=None,
     ):
-        """Forward pass of the attention layer.
-
-        shortformer_pos_embed is only used if self.cfg.positional_embedding_type == "shortformer", else defaults to None
-        and is irrelevant. See HookedTransformerConfig for more details
-        past_kv_cache_entry is an optional entry of past keys and values for this layer, only relevant if generating
-        text. Defaults to None.
         """
+        shortformer_pos_embed is only used if self.cfg.positional_embedding_type == "shortformer", else defaults to None and is irrelevant. See HookedTransformerConfig for more details
+        past_kv_cache_entry is an optional entry of past keys and values for this layer, only relevant if generating text. Defaults to None
+        additive_attention_mask is an optional mask to add to the attention weights. Defaults to None.
+        left_attention_mask is the attention mask for left padded tokens. None when right padding is used. Defaults to None.
+        """
+
         if self.cfg.use_split_qkv_input:
             qkv_einops_string = "batch pos head_index d_model"
         else:
@@ -442,11 +444,16 @@ class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
         if self.cfg.positional_embedding_type == "rotary":
             q, k = self.rotary_rotate_qk(q, k, kv_cache_pos_offset)
 
+        if self.cfg.dtype not in [torch.float32, torch.float64]:
+            # If using 16 bits, increase the precision to avoid numerical instabilities
+            q = q.to(torch.float32)
+            k = k.to(torch.float32)
+
         attn_scores = (
             einsum(
                 "batch query_pos head_index d_head, \
-                batch key_pos head_index d_head \
-                -> batch head_index query_pos key_pos",
+                    batch key_pos head_index d_head \
+                    -> batch head_index query_pos key_pos",
                 q,
                 k,
             )
@@ -455,12 +462,16 @@ class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
         if self.cfg.attention_dir == "causal":
             # If causal attention, we mask it to only attend backwards. If bidirectional, we don't mask.
             attn_scores = self.apply_causal_mask(
-                attn_scores, kv_cache_pos_offset
+                attn_scores, kv_cache_pos_offset, left_attention_mask
             )  # [batch, head_index, query_pos, key_pos]
+        if additive_attention_mask is not None:
+            attn_scores += additive_attention_mask
+
         attn_scores = self.hook_attn_scores(attn_scores)
-        pattern = self.hook_pattern(
-            F.softmax(attn_scores, dim=-1)
-        )  # [batch, head_index, query_pos, key_pos]
+        pattern = F.softmax(attn_scores, dim=-1)
+        pattern = torch.where(torch.isnan(pattern), torch.zeros_like(pattern), pattern)
+        pattern = self.hook_pattern(pattern)  # [batch, head_index, query_pos, key_pos]
+        pattern = pattern.to(self.cfg.dtype)
         z = self.hook_z(
             einsum(
                 "batch key_pos head_index d_head, \
@@ -479,8 +490,8 @@ class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
                 (
                     einsum(
                         "batch pos head_index d_head, \
-                        head_index d_head d_model -> \
-                        batch pos d_model",
+                            head_index d_head d_model -> \
+                            batch pos d_model",
                         z,
                         self.W_O,
                     )
