@@ -227,7 +227,7 @@ def prepare_example_print(
 def print_token_activations_of_code(
     code_act_by_pos,
     tokens,
-    is_tokfsm=False,
+    is_fsm=False,
     n=3,
     max_examples=100,
     randomize=False,
@@ -240,7 +240,7 @@ def print_token_activations_of_code(
         code_act_by_pos: list of (example_id, token_pos_id) tuples specifying
             the token positions that a code activates on in a dataset.
         tokens: list of tokens of a dataset.
-        is_tokfsm: whether the dataset is the TokFSM dataset.
+        is_fsm: whether the dataset is the TokFSM dataset.
         n: context to print around each side of a token that the code activates on.
         max_examples: maximum number of examples to print.
         randomize: whether to randomize the order of examples.
@@ -258,7 +258,7 @@ def print_token_activations_of_code(
     curr_ex = code_act_by_pos[0][0]
     total_examples = 0
     tokens_to_color = []
-    color_fn = color_tokens_tokfsm if is_tokfsm else partial(color_tokens, n=n)
+    color_fn = color_tokens_tokfsm if is_fsm else partial(color_tokens, n=n)
     for idx in indices:
         if total_examples > max_examples:
             break
@@ -301,7 +301,7 @@ def print_token_activations_of_code(
 def print_token_activations_of_codes(
     ft_tkns,
     tokens,
-    is_tokfsm=False,
+    is_fsm=False,
     n=3,
     start=0,
     stop=1000,
@@ -327,7 +327,7 @@ def print_token_activations_of_codes(
             tkn_acts = print_token_activations_of_code(
                 tkns_of_code,
                 tokens,
-                is_tokfsm,
+                is_fsm,
                 n=n,
                 max_examples=max_examples,
                 randomize=randomize,
@@ -445,7 +445,7 @@ def cb_hook_key_to_info(layer_hook_key: str):
             E.g. `blocks.3.attn.codebook_layer.hook_codebook_ids`
 
     Returns:
-        comp_name: the name of the component codebook is appied at.
+        comp_name: the name of the component codebook is applied at.
         layer_idx: the layer index.
         gcb_idx: the codebook index if the codebook layer is grouped, otherwise None.
     """

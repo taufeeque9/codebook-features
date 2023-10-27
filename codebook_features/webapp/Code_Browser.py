@@ -114,7 +114,7 @@ st.markdown("## Demo Codes")
 demo_codes_desc = (
     "This section contains codes that we've found to be interpretable along "
     "with a description of the feature we think they are capturing. "
-    "Click on the 🔍 search button for a code to see the tokens that code activates on. "
+    "Click on the 🔍 search button for a code to see the tokens that code activates on."
 )
 st.write(demo_codes_desc)
 demo_file_path = cache_path + "demo_codes.txt"
@@ -164,7 +164,7 @@ if st.checkbox("Show Demo Codes"):
             continue
         if skip:
             continue
-        code_info = utils.CodeInfo.from_str(code_txt, code_regex)
+        code_info = utils.CodeInfo.from_str(code_txt, regex=code_regex)
         comp_info = f"layer{code_info.layer}_{f'head{code_info.head}' if code_info.head is not None else ''}"
         button_key = (
             f"demo_search_code{code_info.code}_layer{code_info.layer}_desc-{code_info.description}"
@@ -190,8 +190,17 @@ if st.checkbox("Show Demo Codes"):
 # --- Code Search ---
 
 st.markdown("## Code Search")
+code_search_desc = (
+    "If you want to find whether the codebooks model has captured a relevant features from the data,"
+    " you can specify a regex pattern for your feature and find whether any code activating on the regex pattern"
+    " exists. The first group in the regex pattern is the token that the code activates on. If the group contains"
+    " multiple tokens, we search for codes that will activate on the first token in the group followed by the"
+    " subsequent tokens in the group. For example, the search term 'New (York)' will try to find codes that"
+    " activate on the bigram feature 'New York' at the York token."
+)
 
 if st.checkbox("Search with Regex"):
+    st.write(code_search_desc)
     regex_pattern = st.text_input(
         "Enter a regex pattern",
         help="Wrap code token in the first group. E.g. New (York)",
@@ -324,7 +333,7 @@ if st.checkbox("Search with Regex"):
 
 st.markdown("## Code Token Activations")
 
-filter_codes = st.checkbox("Show filters", key="filter_codes")
+filter_codes = st.checkbox("Show filters", key="filter_codes", value=True)
 act_range, layer_code_acts = None, None
 if filter_codes:
     act_range = st.slider(

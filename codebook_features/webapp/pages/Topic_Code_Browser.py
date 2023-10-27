@@ -1,8 +1,6 @@
 """Web app page for showing codes for different examples in the dataset."""
 
-
 import streamlit as st
-from streamlit.components.v1 import html
 from streamlit_extras.switch_page_button import switch_page
 
 from codebook_features import code_search_utils
@@ -25,8 +23,8 @@ act_count_ft_tkns = st.session_state["act_count_ft_tkns"]
 gcb = st.session_state["gcb"]
 
 
-def get_example_concept_codes(example_id):
-    """Get concept codes for the given example id."""
+def get_example_topic_codes(example_id):
+    """Get topic codes for the given example id."""
     token_pos_ids = [(example_id, i) for i in range(seq_len)]
     all_codes = []
     for cb_name, cb in cb_acts.items():
@@ -56,11 +54,11 @@ def get_example_concept_codes(example_id):
 
 
 def find_next_example(example_id):
-    """Find the example after `example_id` that has concept codes."""
+    """Find the example after `example_id` that has topic codes."""
     initial_example_id = example_id
     example_id += 1
     while example_id != initial_example_id:
-        all_codes = get_example_concept_codes(example_id)
+        all_codes = get_example_topic_codes(example_id)
         codes_found = sum([len(code_pr_infos) for _, code_pr_infos in all_codes])
         if codes_found > 0:
             st.session_state["example_id"] = example_id
@@ -81,25 +79,8 @@ def redirect_to_main_with_code(code, layer, head):
     switch_page("Code Browser")
 
 
-def show_examples_for_concept_code(code, layer, head, code_act_ratio=0.3):
+def show_examples_for_topic_code(code, layer, head, code_act_ratio=0.3):
     """Show examples that the code activates on."""
-    info_txt = f"Code: {code}, Layer: {layer}, Head: {head}, Occ Freq: {code_act_ratio}"
-    my_html = f"""
-    <script>
-        async function myF() {{
-            await new Promise(r => setTimeout(r, 100));
-            const textarea = document.createElement("textarea");
-            textarea.textContent = "{info_txt}";
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand("copy");
-            document.body.removeChild(textarea);
-        }}
-        myF();
-    </script>
-    """
-    html(my_html, height=0, width=0, scrolling=False)
-
     ex_acts, _ = webapp_utils.get_code_acts(
         model_name,
         tokens_str,
@@ -121,14 +102,16 @@ def show_examples_for_concept_code(code, layer, head, code_act_ratio=0.3):
 
 is_attn = st.session_state["is_attn"]
 
-st.markdown("## Concept Code")
-concept_code_description = (
-    "Concept codes are codes that activate a lot on only a particular set of examples that share a concept. "
-    "Hence such codes can be thought to correspond to more higher-level concepts or features and "
-    "can activate on most tokens that belong in an example text. This interface provides a way to search for such "
-    "codes by going through different examples using Example ID."
+st.markdown("## Topic Code")
+topic_code_description = (
+    "Topic codes are codes that activate many different times on passages that describe a particular"
+    " topic or concept (e.g. “fire”). This interface provides a way to search for such codes by looking"
+    " at different examples in the dataset (ExampleID) and finding codes that activate on some fraction"
+    " of the tokens in that example (Recall Threshold). Decrease the Recall Threshold to view more possible"
+    " topic codes and increase it to see fewer. Click “Find Next Example” to find the next example with at"
+    " least one code firing on that example above the Recall Threshold."
 )
-st.write(concept_code_description)
+st.write(topic_code_description)
 
 ex_col, r_col, trunc_col, sort_col = st.columns([1, 1, 1, 1])
 example_id = ex_col.number_input(
@@ -142,7 +125,7 @@ recall_threshold = r_col.slider(
     "Recall Threshold",
     0.0,
     1.0,
-    0.3,
+    0.2,
     key="recall",
     help="Recall Threshold is the minimum fraction of tokens in the example that the code must activate on.",
 )
@@ -153,7 +136,7 @@ sort_by_options = ["Precision", "Recall", "Num Acts"]
 sort_by_name = sort_col.radio(
     "Sort By",
     sort_by_options,
-    index=0,
+    index=1,
     horizontal=True,
     help="Sorts the codes by the selected metric.",
 )
@@ -185,7 +168,7 @@ cols[-1].markdown(
     help="Number of tokens that the code activates on in the acts dataset.",
 )
 
-all_codes = get_example_concept_codes(example_id)
+all_codes = get_example_topic_codes(example_id)
 all_codes = [
     (cb_name, code_pr_info)
     for cb_name, code_pr_infos in all_codes
@@ -210,7 +193,7 @@ for cb_name, (code, p, r, acts) in all_codes:
     cols[-1].write(str(acts))
 
     if code_button:
-        show_examples_for_concept_code(
+        show_examples_for_topic_code(
             code,
             layer,
             head,
@@ -218,6 +201,7 @@ for cb_name, (code, p, r, acts) in all_codes:
         )
 if len(all_codes) == 0:
     st.markdown(
-        f"<div style='text-align:center'>No codes found at recall threshold: {recall_threshold}</div>",
+        f"<div style='text-align:center'>No codes found at recall threshold = {recall_threshold}."
+        " Consider decreasing the recall threshold.</div>",
         unsafe_allow_html=True,
     )
