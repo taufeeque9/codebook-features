@@ -7,7 +7,7 @@ license = "MIT"
 readme = "README.md"
 packages = [{include = "codebook_features"}]
 homepage = "https://huggingface.co/spaces/taufeeque/codebook-features"
-repository = "https://github.com/alextamkin/codebook-features"
+repository = "https://github.com/taufeeque9/codebook-features"
 keywords = ["codebook", "features", "transformers", "interpretability"]
 
 
