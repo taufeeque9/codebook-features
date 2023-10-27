@@ -36,7 +36,7 @@ repos:
   rev: v2.2.5
   hooks:
   - id: codespell
-    args: ["--skip=*.pyc,tests/testdata/*,*.ipynb,*.csv","--ignore-words-list=codebook"]
+    args: ["--skip=*.lock,*.pyc,tests/testdata/*,*.ipynb,*.csv","--ignore-words-list=codebook"]
 # Hooks that run in local environment (not isolated venv) as they need
 # same dependencies as our package.
 -   repo: https://github.com/pre-commit/mirrors-mypy

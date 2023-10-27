@@ -1351,9 +1351,9 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             "mlp": "codebook_at_mlp",
             "mlp_mid": "codebook_at_mlp_mid",
             "qkv": "codebook_at_qkv",
-            "attention": "codebook_at_attention",
-            "preproj_attention": "codebook_at_preprojection_attn",
-            "attention_and_mlp": "codebook_at_attention_plus_mlp",
+            "attn": "codebook_at_attention",
+            "attn_preproj": "codebook_at_preprojection_attn",
+            "attn_plus_mlp": "codebook_at_attention_plus_mlp",
         }
         layers = self.layers()
         for i in range(len(layers)):
@@ -1380,7 +1380,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             codebook_cls=self.codebook_cls[i_cb],
             dim=self.d_model,
             num_codes=self.config.num_codes[i_cb],
-            key=f"layer{i}_tb",
+            key=f"layer{i}_transformer_block",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,
@@ -1532,7 +1532,7 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         codebook = self.codebook_cls[i_cb](
             dim=self.d_model,
             num_codes=self.config.num_codes[i_cb],
-            key=f"layer{i}_attn+mlp",
+            key=f"layer{i}_attn_plus_mlp",
             snap_fn=self.snap_fn,
             num_codebooks=self.config.num_codebooks[i_cb],
             kmeans_init=self.config.kmeans_init,

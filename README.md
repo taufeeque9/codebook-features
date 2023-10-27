@@ -1,4 +1,15 @@
 # Codebook Features
+<a target="_blank" href="https://colab.research.google.com/github/taufeeque9/codebook-features/blob/main/tutorials/code_intervention.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+<a target="_blank" href="https://huggingface.co/spaces/taufeeque/codebook-features">
+<img src="https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm-dark.svg", alt="Open in Spaces">
+</a>
+
+Alex Tamkin, Mohammad Taufeeque and Noah D. Goodman: "Codebook Features: Sparse and Discrete Interpretability for Neural Networks", 2023. [[arXiv]](https://arxiv.org/abs/2310.17230)
+
+<img width="989" alt="header-old" src="https://github.com/taufeeque9/codebook-features/assets/46495671/c84ce44e-aa7b-4d44-869c-0745ed6ee9f8">
+
 
 Codebook Features is a method for training neural networks with a set of learned sparse and discrete hidden states, enabling interpretability and control of the resulting model.
 
@@ -8,7 +19,7 @@ Codebook features work by inserting vector quantization bottlenecks called _code
 ## Installation
 Create a virtual environment and then:
 ```
-git clone https://github.com/alextamkin/codebook-features
+git clone https://github.com/taufeeque9/codebook-features
 cd codebook-features
 pip install -e .
 ```
@@ -74,18 +85,15 @@ For tutorials on how to use the library, please see the [Codebook Features Tutor
 </details>
 
 
+## Citation
 
-## BibTeX Citation
-
-```
-@misc{codebookfeatures,
-  author = {},
-  title = {},
-  year = {2023},
-  howPublished = {},
-  archivePrefix = {arXiv},
-  eprint = {},
-  primaryClass = {},
-  url = {},
+```bibtex
+@misc{tamkin2023codebook,
+      title={Codebook Features: Sparse and Discrete Interpretability for Neural Networks},
+      author={Alex Tamkin and Mohammad Taufeeque and Noah D. Goodman},
+      year={2023},
+      eprint={2310.17230},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
 }
 ```

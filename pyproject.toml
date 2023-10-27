@@ -7,7 +7,7 @@ license = "MIT"
 readme = "README.md"
 packages = [{include = "codebook_features"}]
 homepage = "https://huggingface.co/spaces/taufeeque/codebook-features"
-repository = "https://github.com/alextamkin/codebook-features"
+repository = "https://github.com/taufeeque9/codebook-features"
 keywords = ["codebook", "features", "transformers", "interpretability"]
 
 
@@ -29,12 +29,14 @@ streamlit = ">=1.26.0"
 streamlit-extras = ">=0.3.0"
 ruff = ">=0.0.200"
 transformer-lens = ">=1.6.0"
+plotly = "^5.17.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.2.0"
 pre-commit = ">=2.20.0"
 jupyter = ">=1.0.0"
 jupyterlab = ">=3.5.0"
+faiss-cpu = "^1.7.4"
 
 [build-system]
 requires = ["poetry-core", "setuptools"]

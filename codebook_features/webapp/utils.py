@@ -237,5 +237,3 @@ def add_save_code_button(
         saved = add_code_to_demo_file(code_info, demo_file_path)
         if saved:
             st.success("Code saved!", icon="🎉")
-        if saved:
-            st.success("Code saved!", icon="🎉")

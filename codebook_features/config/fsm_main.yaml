@@ -27,7 +27,7 @@ training_args:
   codebook_weight_decay: 0.01
 
 codebook_args:
-  codebook_at: ["preproj_attention", "mlp"]
+  codebook_at: ["attn_preproj", "mlp"]
   codebook_type: ["group", "vanilla"]
   num_codebooks: [-1, 1]
   k_codebook: [1,1]

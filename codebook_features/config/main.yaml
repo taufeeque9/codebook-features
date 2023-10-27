@@ -39,7 +39,7 @@ codebook_args:
   num_codebooks: -1
   layers_to_snap: all
   similarity_metric: inner_product
-  codebook_at: preproj_attention
+  codebook_at: attn_preproj
   loss: aeloss
   k_codebook: 8
   kmeans_init: False
