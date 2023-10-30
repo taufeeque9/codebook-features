@@ -17,11 +17,29 @@ Codebook features work by inserting vector quantization bottlenecks called _code
 
 
 ## Installation
-Create a virtual environment and then:
+
+### PyPI
+
+Install from PyPI to directly use the library:
+
+```
+pip install codebook-features
+```
+
+### Source Code
+
+Install from source code if you plan to modify part of the code or contribute to the library:
+
 ```
 git clone https://github.com/taufeeque9/codebook-features
 cd codebook-features
 pip install -e .
+```
+
+For development mode, we recommend using Poetry:
+
+```
+poetry install
 ```
 
 ## Usage
