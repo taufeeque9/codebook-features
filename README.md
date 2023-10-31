@@ -8,7 +8,7 @@
 
 Alex Tamkin, Mohammad Taufeeque and Noah D. Goodman: "Codebook Features: Sparse and Discrete Interpretability for Neural Networks", 2023. [[arXiv]](https://arxiv.org/abs/2310.17230)
 
-<img width="989" alt="header-old" src="https://github.com/taufeeque9/codebook-features/assets/46495671/c84ce44e-aa7b-4d44-869c-0745ed6ee9f8">
+<img alt="header-old" src="https://github.com/taufeeque9/codebook-features/assets/46495671/ba0c31e5-4983-4504-ad02-9f8208d9396d">
 
 
 Codebook Features is a method for training neural networks with a set of learned sparse and discrete hidden states, enabling interpretability and control of the resulting model.
@@ -65,7 +65,7 @@ python -m streamlit run codebook_features/webapp/Code_Browser.py -- --cache_dir 
 
 ### Code Intervention
 
-To control a network, one can _intervene_ on codes by causing them to always be activated during the forward pass. This can be useful to influence the sampled generations, e.g., to cause the network to discuss certain topics. For a general tutorial on using codebook models and seeing how you can perform code intervention, please see the [Code Intervention Tutorial](https://github.com/alextamkin/codebook-features/blob/main/tutorials/code_intervention.ipynb).
+To control a network, one can _intervene_ on codes by causing them to always be activated during the forward pass. This can be useful to influence the sampled generations, e.g., to cause the network to discuss certain topics. For a general tutorial on using codebook models and seeing how you can perform code intervention, please see the [Code Intervention Tutorial](https://github.com/taufeeque9/codebook-features/blob/main/tutorials/code_intervention.ipynb).
 
 
 <details>
@@ -98,7 +98,7 @@ The `codebook_features/train_fsm_model.py` script can be used to train a codeboo
 
 
 
-For tutorials on how to use the library, please see the [Codebook Features Tutorials](https://github.com/alextamkin/codebook-features/tree/main/tutorials).
+For tutorials on how to use the library, please see the [Codebook Features Tutorials](https://github.com/taufeeque9/codebook-features/tree/main/tutorials).
 
 </details>
 

@@ -191,12 +191,12 @@ if st.checkbox("Show Demo Codes"):
 
 st.markdown("## Code Search")
 code_search_desc = (
-    "If you want to find whether the codebooks model has captured a relevant features from the data,"
-    " you can specify a regex pattern for your feature and find whether any code activating on the regex pattern"
-    " exists. The first group in the regex pattern is the token that the code activates on. If the group contains"
-    " multiple tokens, we search for codes that will activate on the first token in the group followed by the"
-    " subsequent tokens in the group. For example, the search term 'New (York)' will try to find codes that"
-    " activate on the bigram feature 'New York' at the York token."
+    "To find whether the codebooks model has captured a relevant feature from the data (e.g. pronouns),"
+    " you can specify a regex pattern for your feature (e.g. “he|she|they”) and find whether any code"
+    " activating on the regex pattern exists.\n\n"
+    "Since strings can contain several tokens, you can specify the token you want a code to fire on by"
+    "  using a capture group. For example, the search term ‘New (York)’ will try to find codes that"
+    " activate on the bigram feature ‘New York’ at the York token"
 )
 
 if st.checkbox("Search with Regex"):
