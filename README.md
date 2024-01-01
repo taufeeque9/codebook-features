@@ -1,3 +1,6 @@
+# Codebook Circuits
+Circuit-style analysis of codes found via **Codebook Features** (below).
+
 # Codebook Features
 <a target="_blank" href="https://colab.research.google.com/github/taufeeque9/codebook-features/blob/main/tutorials/code_intervention.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
