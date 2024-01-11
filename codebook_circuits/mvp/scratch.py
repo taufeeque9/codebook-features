@@ -3,6 +3,7 @@ from codebook_features import models
 from codebook_features import utils as cb_utils
 import torch
 import re
+from transformer_lens.utils import test_prompt
 
 # We turn automatic differentiation off, to save GPU memory,
 # as this tutorial focuses only on model inference
@@ -45,4 +46,8 @@ assert torch.allclose(output, hooked_output, atol=1e-4)
 very_first_head_cb = cb_model.blocks[0].attn.codebook_layer.codebook[0].codebook.weight
 
 print(f"Codebook associated with the first head of the first layer of model: {very_first_head_cb}")
+
+test_prompt(prompt = "After John and Mary went to the store, Mary gave a bottle of milk to",
+            answer = " John",
+            model = cb_model)
 
