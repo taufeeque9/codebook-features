@@ -34,6 +34,7 @@ cb_model = models.convert_to_hooked_model(
     model_name_or_path, orig_cb_model, hooked_kwargs=hooked_kwargs
 )
 cb_model = cb_model.to(DEVICE).eval()
+cb_model.enable_logging()
 tokenizer = cb_model.tokenizer
 
 sentence = "this is a random sentence to test."
@@ -47,7 +48,15 @@ very_first_head_cb = cb_model.blocks[0].attn.codebook_layer.codebook[0].codebook
 
 print(f"Codebook associated with the first head of the first layer of model: {very_first_head_cb}")
 
+prompt = "After John and Mary went to the store, Mary gave a bottle of milk to"
+
 test_prompt(prompt = "After John and Mary went to the store, Mary gave a bottle of milk to",
             answer = " John",
             model = cb_model)
+ 
+output, cache = cb_model.run_with_cache(prompt)
+
+# The final position of the first codebook in the first layer
+very_first_codebook_final_pos = cache['blocks.0.attn.codebook_layer.codebook.0.hook_codebook_ids'][0][-1]
+print(f'The final position of the first codebook in the first head of the first attention block is: {very_first_codebook_final_pos}')
 
