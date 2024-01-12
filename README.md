@@ -1,5 +1,12 @@
 # Codebook Circuits
+# 🚧 Under Construction 🚧
+
 Circuit-style analysis of codes found via **Codebook Features** (below).
+
+- [x] Implement activation patching MVP.
+- [ ] Implement path patching MVP.
+- [ ] Implement recursive path patching MVP.
+
 
 # Codebook Features
 <a target="_blank" href="https://colab.research.google.com/github/taufeeque9/codebook-features/blob/main/tutorials/code_intervention.ipynb">
