@@ -1,9 +1,10 @@
-from typing import Optional, Union
 import re
+from typing import Optional, Union
 
 # Taken from the commit:
 # https://github.com/neelnanda-io/TransformerLens/commit/ce82675a8e89b6d5e6229a89620c843c794f3b04
 # Modify get_act_name from transformer_lens.utils to work with codebook hooks
+
 
 def get_act_name(
     name: str,
@@ -106,16 +107,18 @@ def get_act_name(
 
     if name in layer_norm_names and layer is None:
         full_act_name = f"ln_final.{full_act_name}"
-    
-    if name.startswith('cb_'):
+
+    if name.startswith("cb_"):
         if layer_type == "attn":
-            head_idx = name.split('_')[1]
+            head_idx = name.split("_")[1]
             full_act_name = f"blocks.{layer}.attn.codebook_layer.codebook.{head_idx}.hook_codebook_ids"
         else:
             # TODO: Codebooks exist for MLPs
-            raise NotImplementedError(f"Layer Type {layer_type} not implemented for codebook hooks")
+            raise NotImplementedError(
+                f"Layer Type {layer_type} not implemented for codebook hooks"
+            )
     return full_act_name
 
-if __name__ == "__main__":
-    print(get_act_name('cb_11', 7, 'attn'))
 
+if __name__ == "__main__":
+    print(get_act_name("cb_11", 7, "attn"))
