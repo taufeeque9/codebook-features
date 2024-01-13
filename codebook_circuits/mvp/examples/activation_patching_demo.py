@@ -1,13 +1,12 @@
 import plotly.graph_objects as go
 import torch as t
-from codebook_features import models
-
-from cb_activation_patching import (
+from codebook_circuits.mvp.codebook_patching import (
     codebook_activation_patcher,
     iter_codebook_act_patching,
 )
-from data import TravelToCityDataset
-from utils import compute_average_logit_difference
+from codebook_circuits.mvp.data import TravelToCityDataset
+from codebook_circuits.mvp.utils import compute_average_logit_difference
+from codebook_features import models
 
 ## Set global device variable
 DEVICE = t.device("cuda" if t.cuda.is_available() else "cpu")

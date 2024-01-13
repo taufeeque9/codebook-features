@@ -1,9 +1,8 @@
 import torch as t
+from codebook_circuits.mvp.data import TravelToCityDataset
 from codebook_features import models
 from jaxtyping import Float
 from torch import Tensor
-
-from data import TravelToCityDataset
 
 
 def compute_average_logit_difference(
