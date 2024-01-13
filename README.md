@@ -6,6 +6,7 @@ Circuit-style analysis of codes found via **Codebook Features** (below).
 - [x] Implement activation patching MVP.
 - [ ] Implement path patching MVP.
 - [ ] Implement recursive path patching MVP.
+- [ ] Add more tests for activation patching.
 
 
 # Codebook Features
