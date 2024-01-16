@@ -1,10 +1,12 @@
+# TODO: Re-write Tests
+
 from functools import partial
 from typing import Callable, Optional
 
 import pytest
 import torch
 import torch as t
-from codebook_circuits.mvp.codebook_patching import (
+from codebook_circuits.mvp.codebook_act_patching import (
     act_patch_attn_codebook,
     basic_codebook_path_patch,
     codebook_activation_patcher,

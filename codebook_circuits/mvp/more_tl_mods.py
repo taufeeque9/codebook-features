@@ -109,7 +109,8 @@ def get_act_name(
         full_act_name = f"ln_final.{full_act_name}"
 
     if name.startswith("cb_"):
-        if layer_type == "attn":
+        # Assume only attn codebooks for now
+        if (layer_type == "attn") or (layer_type is None):
             head_idx = name.split("_")[1]
             full_act_name = f"blocks.{layer}.attn.codebook_layer.codebook.{head_idx}.hook_codebook_ids"
         else:
@@ -121,4 +122,4 @@ def get_act_name(
 
 
 if __name__ == "__main__":
-    print(get_act_name("cb_11", 7, "attn"))
+    print(get_act_name("cb_11", 7))
