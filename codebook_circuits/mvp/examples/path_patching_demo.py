@@ -4,6 +4,7 @@ from codebook_circuits.mvp.codebook_patching import basic_codebook_path_patch
 from codebook_circuits.mvp.data import TravelToCityDataset
 from codebook_circuits.mvp.utils import compute_average_logit_difference
 from codebook_features import models
+from codebook_circuits.mvp.codebook_patching_extended import Node, path_patch, _path_patch_single
 
 ## Set global device variable
 DEVICE = t.device("cuda" if t.cuda.is_available() else "cpu")
@@ -41,8 +42,8 @@ incorrect_correct_toks = t.cat(
 )
 orig_input = dataset.clean_prompts
 new_input = dataset.corrupted_prompts
-orig_tokens = cb_model.to_tokens(orig_input, prepend_bos=False)
-new_tokens = cb_model.to_tokens(new_input, prepend_bos=False)
+orig_tokens = cb_model.to_tokens(orig_input, prepend_bos=True)
+new_tokens = cb_model.to_tokens(new_input, prepend_bos=True)
 orig_logits = cb_model(orig_tokens)
 original_perfomance = compute_average_logit_difference(
     orig_logits, incorrect_correct_toks, answer_position=-1
@@ -52,7 +53,7 @@ print(f"Original Model Perfomance: {original_perfomance}")
 _, orig_cache = cb_model.run_with_cache(orig_tokens)
 _, new_cache = cb_model.run_with_cache(new_tokens)
 
-patched_logits = basic_codebook_path_patch(
+patched_logits_basic_method = basic_codebook_path_patch(
     cb_model=cb_model,
     sender_codebook_layer=17,
     sender_codebook_head_idx=5,
@@ -65,8 +66,37 @@ patched_logits = basic_codebook_path_patch(
     new_cache=new_cache,
 )
 
-patched_performance = compute_average_logit_difference(
-    patched_logits, incorrect_correct_toks, answer_position=-1
+patched_performance_basic_method = compute_average_logit_difference(
+    patched_logits_basic_method, incorrect_correct_toks, answer_position=-1
 )
 
-print(f"Patched Model Perfomance: {patched_performance}")
+print(f"Patched Model Perfomance - Basic Method: {patched_performance_basic_method}")
+
+sender_nodes = Node(node_name="cb_5", codebook_layer=17)
+receiver_nodes = Node(node_name="cb_10", codebook_layer=19)
+
+patched_logits_extended_method = _path_patch_single(
+        codebook_model = cb_model,
+        orig_input = orig_input,
+        sender_codebooks = sender_nodes,
+        receiver_codebooks = receiver_nodes,
+        orig_cache = orig_cache,
+        new_cache = new_cache,
+        seq_pos = None)
+
+# patched_logits_extended_method = path_patch(
+#     codebook_model=cb_model,
+#     orig_input=orig_input,
+#     new_input=new_input,
+#     sender_nodes=sender_nodes,
+#     receiver_nodes=receiver_nodes,
+#     orig_cache=orig_cache,
+#     new_cache=new_cache,
+#     seq_pos=None,
+#     verbose=False)
+
+patched_performance_extended_method = compute_average_logit_difference(
+    patched_logits_extended_method, incorrect_correct_toks, answer_position=-1
+)
+
+print(f"Patched Model Perfomance - Extended Method: {patched_performance_extended_method}")

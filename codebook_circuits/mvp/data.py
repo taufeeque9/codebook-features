@@ -18,26 +18,37 @@ class TravelToCityDataset:
             " Madrid",
             " Athens",
         ]
+        self._male_names = [
+            " John",
+            " Adam",
+            " Carl",
+            " Sean",
+            " Tom",
+        ]
+
+        self._female_names = [" Mary", " Amy", " Kate", " Sarah", " Alice"]
         self.clean_prompts = []
         self.correct_incorrects = []
         self.corrupted_prompts = []
-        self._n_examples = n_examples
+        self.n_examples = n_examples
         self._generate_prompts()
 
     def _generate_prompts(self):
         """Generate the prompts and their correct and incorrect responses."""
-        for _ in range(self._n_examples // 2):
+        for _ in range(self.n_examples // 2):
             place1, place2 = np.random.choice(self._places, 2, replace=False)
+            male_name = np.random.choice(self._male_names, 1)[0]
+            female_name = np.random.choice(self._female_names, 1)[0]
             self.clean_prompts.extend(
                 [
-                    f"John was driving from{place1} to{place2}, when he arrived in",
-                    f"Mary was driving from{place1} to{place2}, when she arrived in",
+                    f"Recently{male_name} was driving from{place1} to{place2}, when he arrived in",
+                    f"Recently{female_name} was driving from{place1} to{place2}, when she arrived in",
                 ]
             )
             self.corrupted_prompts.extend(
                 [
-                    f"John was driving from{place2} to{place1}, when he arrived in",
-                    f"Mary was driving from{place2} to{place1}, when she arrived in",
+                    f"Recently{male_name} was driving from{place2} to{place1}, when he arrived in",
+                    f"Recently{female_name} was driving from{place2} to{place1}, when she arrived in",
                 ]
             )
             self.correct_incorrects.extend([(place2, place1), (place2, place1)])

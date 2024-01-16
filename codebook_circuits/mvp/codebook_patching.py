@@ -1,6 +1,6 @@
 # Imports
 from functools import partial
-from typing import Optional
+from typing import Optional, Union, List, Callable
 
 import torch as t
 from codebook_circuits.mvp.more_tl_mods import get_act_name
@@ -11,14 +11,14 @@ from torch import Tensor, zeros
 from tqdm import tqdm
 from transformer_lens import ActivationCache
 from transformer_lens.hook_points import HookPoint
+import re
+
 
 ## Before jumping into path patching, let's implement the conceptually simpler
 ## activation patching. This will allow us to conduct sanity checks on the results
 ## of path patching (as well as be useful in its own right).
 
 ## Activation Patching Implementation
-
-
 def act_patch_attn_codebook(
     orig_codebook: Float[Tensor, "batch pos codes"],
     position: int,
