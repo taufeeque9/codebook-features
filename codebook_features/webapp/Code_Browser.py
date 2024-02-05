@@ -48,7 +48,12 @@ st.title("Codebook Features")
 base_cache_dir = args.cache_dir
 dirs = glob.glob(base_cache_dir + "*/")
 model_name_options = [d.split("/")[-2].split("_")[:-2] for d in dirs]
-model_name_options = ["_".join(m) for m in model_name_options]
+model_name_options = ["_".join(m) for m in model_name_options if len(m) > 0]
+if len(model_name_options) == 0:
+    raise ValueError(
+        f"No cache found in {base_cache_dir}. Make sure to provide the base directory that"
+        " contains the cache folders for all the models."
+    )
 model_name_options = sorted(set(model_name_options))
 try:
     def_model_idx = ["attn" in m.lower() for m in model_name_options].index(True)
@@ -72,7 +77,7 @@ cache_path = dirs[-1] + "/"
 model_info = utils.ModelInfoForWebapp.load(cache_path)
 num_codes = model_info.num_codes
 num_layers = model_info.n_layers
-num_heads = model_info.n_heads
+num_heads = model_info.n_grps
 cb_at = model_info.cb_at
 gcb = model_info.gcb
 multiple_cbs = not (gcb == "_vcb" or gcb == "")
@@ -169,9 +174,8 @@ if st.checkbox("Show Demo Codes"):
             continue
         code_info = utils.CodeInfo.from_str(code_txt, regex=code_regex)
         comp_info = f"layer{code_info.layer}_{f'head{code_info.head}' if code_info.head is not None else ''}"
-        button_key = (
-            f"demo_search_code{code_info.code}_layer{code_info.layer}_desc-{code_info.description}"
-            + (f"head{code_info.head}" if code_info.head is not None else "")
+        button_key = f"demo_search_code{code_info.code}_layer{code_info.layer}_desc-{code_info.description}" + (
+            f"head{code_info.head}" if code_info.head is not None else ""
         )
         cols = st.columns([1] * (num_cols - 1) + [2])
         button_clicked = cols[0].button(
@@ -179,9 +183,7 @@ if st.checkbox("Show Demo Codes"):
             key=button_key,
         )
         if button_clicked:
-            webapp_utils.set_ct_acts(
-                code_info.code, code_info.layer, code_info.head, None, multiple_cbs
-            )
+            webapp_utils.set_ct_acts(code_info.code, code_info.layer, code_info.head, None, multiple_cbs)
         cols[1].write(code_info.code)
         cols[2].write(str(code_info.layer))
         if multiple_cbs:
@@ -229,9 +231,7 @@ if st.checkbox("Search with Regex"):
     sort_by = sort_by_options.index(sort_by_name)
 
     @st.cache_data(ttl=3600)
-    def get_codebook_wise_codes_for_regex(
-        regex_pattern, prec_threshold, gcb, model_name
-    ):
+    def get_codebook_wise_codes_for_regex(regex_pattern, prec_threshold, gcb, model_name):
         """Get codebook wise codes for a given regex pattern."""
         assert model_name is not None  # required for loading from correct cache data
         return code_search_utils.get_codes_from_pattern(
@@ -281,19 +281,13 @@ if st.checkbox("Search with Regex"):
                 help="Button to save the code to demos along with the regex pattern.",
             )
         all_codes = codebook_wise_codes.items()
-        all_codes = [
-            (cb_name, code_pr_info)
-            for cb_name, code_pr_infos in all_codes
-            for code_pr_info in code_pr_infos
-        ]
+        all_codes = [(cb_name, code_pr_info) for cb_name, code_pr_infos in all_codes for code_pr_info in code_pr_infos]
         all_codes = sorted(all_codes, key=lambda x: x[1][1 + sort_by], reverse=True)
         for cb_name, (code, prec, rec, code_acts) in all_codes:
             layer_head = cb_name.split("_")
             layer = layer_head[0][5:]
             head = layer_head[1][4:] if len(layer_head) > 1 else None
-            button_key = f"search_code{code}_layer{layer}" + (
-                f"head{head}" if head is not None else ""
-            )
+            button_key = f"search_code{code}_layer{layer}" + (f"head{head}" if head is not None else "")
             cols = st.columns(num_search_cols)
             extra_args = {
                 "prec": prec,
@@ -368,9 +362,7 @@ else:
 
 def_code = st.session_state.get("ct_act_code", 0)
 if filter_codes:
-    layer_code_acts = act_count_ft_tkns[
-        f"layer{layer}{'_head'+str(head) if head is not None else ''}"
-    ]
+    layer_code_acts = act_count_ft_tkns[f"layer{layer}{'_head'+str(head) if head is not None else ''}"]
     def_code = webapp_utils.find_next_code(def_code, layer_code_acts, act_range)
     if "ct_act_code" in st.session_state:
         st.session_state["ct_act_code"] = def_code
@@ -411,7 +403,7 @@ acts, acts_count = webapp_utils.get_code_acts(
 
 st.write(
     f"Token Activations for Layer {layer}{f' Head {head}' if head is not None else ''} Code {code} | "
-    f"Activates on {acts_count[0]} tokens on the acts dataset",
+    f"Activates on {acts_count[0]} tokens for TopK = {topk}",
 )
 
 if not deploy:
