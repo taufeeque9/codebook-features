@@ -55,12 +55,12 @@ python -m codebook_features.train_codebook model_args.model_name_or_path=ronenel
 
 Once a codebook model has been trained and saved on disk, we can use the interpretability webapp to visualize the codebook. First, we need to generate the relevant cache files for the codebook model that is required for the webapp. This can be done by running the script `codebook_features/code_search_cache.py`:
 ```
-python -m codebook_features.code_search_cache --model_name <path to codebook model> --pretrained_path --dataset_name <dataset name> --dataset_config_name <dataset config name> --output_base_dir <path to output directory>
+python -m codebook_features.code_search_cache --orig_model_name <orig name/path of model> --pretrained_path <path to codebook model> --dataset_name <dataset name> --dataset_config_name <dataset config name> --output_base_dir <path to output directory>
 ```
 
-Once the cache files have been generated, we can run the webapp using the following command:
+Once the cache files have been generated, we can run the webapp using the following command with the base output directory used in the above command:
 ```
-python -m streamlit run codebook_features/webapp/Code_Browser.py -- --cache_dir <path to cache directory>
+python -m streamlit run codebook_features/webapp/Code_Browser.py -- --cache_dir <path to the base cache directory>
 ```
 
 ### Code Intervention
@@ -95,7 +95,6 @@ The `codebook_features/train_codebook.py` script is used to train a codebook mod
 The `codebook_features/train_fsm_model.py` script provides an algorithmic sequence modeling task to analyse the codebook models. The task is to predict the next element in a sequence of numbers generated using a Finite State Machine (FSM). The `train_fsm_model/FSM` class defines the FSM by taking in the number of states through `N`, the number of outbound edges from each state through `edges`, and the base in which to represent the state using `representation_base`. The `train_fsm_model/TokFSMDataset` class defines an iterable torch dataset using the FSM that generates the dataset on the fly. The `train_fsm_model/TokFSMModelTrainer` provides additional logging feature specific to the fsm models like logging the transition accuracy of a model.
 
 The `codebook_features/train_fsm_model.py` script can be used to train a codebook model on the TokFSM dataset. The syntax for the arguments and training procedure is similar to the `train_codebook.py` script. The default arguments for the training script is available in `codebook_features/config/fsm_main.yaml`.
-
 
 
 For tutorials on how to use the library, please see the [Codebook Features Tutorials](https://github.com/taufeeque9/codebook-features/tree/main/tutorials).

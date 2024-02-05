@@ -525,7 +525,7 @@ class CodebookLayer(nn.Module):
                 norm_output = self.codebook(codebook_ids)
                 norm_output[block_idx] = 0
                 norm_output = norm_output.mean(dim=-2)
-                output = self.reverse_norm(norm_output)
+                output = norm_output
                 codebook_ids[block_idx] = -1
 
         self.update_metrics(codebook_ids.cpu(), normalized_input, norm_output)

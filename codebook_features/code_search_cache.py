@@ -171,12 +171,12 @@ def prepare_act_count_ft_tkns(cb_acts, args, model_info):
 def main():
     """Generate cache for code search webapp."""
     args = parse_args()
-    model_id = args.model_name.split("/")[-1]
+    model_id = args.orig_model_name.split("/")[-1]
     dataset_name = args.dataset_name
 
     device = "cuda"
     orig_cb_model = models.wrap_codebook(
-        model_or_path=args.model_name,
+        model_or_path=args.orig_model_name,
         pretrained_path=args.pretrained_path,
     )
     orig_cb_model = orig_cb_model.to(device).eval()
@@ -205,7 +205,7 @@ def main():
     model_args = run_clm.ModelArguments(
         model_name_or_path=args.pretrained_path,
         cache_dir=args.huggingface_cache_dir,
-        tokenizer_name=args.model_name,
+        tokenizer_name=args.orig_model_name,
     )
     if not dataset_name:
         if "tinystories" in model_id.lower():
