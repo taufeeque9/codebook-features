@@ -94,12 +94,7 @@ def get_code_precision_and_recall(token_pos_ids, codebook_acts, cb_act_counts=No
         code_acts: numpy array where `code_acts[i]` is the number of times
             the code `codes[i]` is activated in the dataset.
     """
-    codes = np.array(
-        [
-            codebook_acts[example_id][token_pos_id]
-            for example_id, token_pos_id in token_pos_ids
-        ]
-    )
+    codes = np.array([codebook_acts[example_id, token_pos_id] for example_id, token_pos_id in token_pos_ids])
     codes, counts = np.unique(codes, return_counts=True)
     recall = counts / len(token_pos_ids)
     idx = recall > 0.01
@@ -117,9 +112,7 @@ def get_code_precision_and_recall(token_pos_ids, codebook_acts, cb_act_counts=No
     return codes, prec, recall, code_acts
 
 
-def get_neuron_precision_and_recall(
-    token_pos_ids, recall, neuron_acts_by_ex, neuron_sorted_acts
-):
+def get_neuron_precision_and_recall(token_pos_ids, recall, neuron_acts_by_ex, neuron_sorted_acts):
     """Get the neurons with the highest precision and recall for the given `token_pos_ids`.
 
     Args:
@@ -144,41 +137,29 @@ def get_neuron_precision_and_recall(
     """
     if isinstance(neuron_acts_by_ex, torch.Tensor):
         neuron_acts_on_pattern = torch.stack(
-            [
-                neuron_acts_by_ex[example_id, token_pos_id]
-                for example_id, token_pos_id in token_pos_ids
-            ],
+            [neuron_acts_by_ex[example_id, token_pos_id] for example_id, token_pos_id in token_pos_ids],
             dim=-1,
         )  # (layers, 2, dim_size, matches)
         neuron_acts_on_pattern = torch.sort(neuron_acts_on_pattern, dim=-1).values
     else:
         neuron_acts_on_pattern = np.stack(
-            [
-                neuron_acts_by_ex[example_id, token_pos_id]
-                for example_id, token_pos_id in token_pos_ids
-            ],
+            [neuron_acts_by_ex[example_id, token_pos_id] for example_id, token_pos_id in token_pos_ids],
             axis=-1,
         )  # (layers, 2, dim_size, matches)
         neuron_acts_on_pattern.sort(axis=-1)
         neuron_acts_on_pattern = torch.from_numpy(neuron_acts_on_pattern)
-    act_thresh = neuron_acts_on_pattern[
-        :, :, :, -int(recall * neuron_acts_on_pattern.shape[-1])
-    ]
+    act_thresh = neuron_acts_on_pattern[:, :, :, -int(recall * neuron_acts_on_pattern.shape[-1])]
     assert neuron_sorted_acts.shape[:-1] == act_thresh.shape
     prec_den = torch.searchsorted(neuron_sorted_acts, act_thresh.unsqueeze(-1))
     prec_den = prec_den.squeeze(-1)
     prec_den = neuron_sorted_acts.shape[-1] - prec_den
     prec = int(recall * neuron_acts_on_pattern.shape[-1]) / prec_den
-    assert (
-        prec.shape == neuron_acts_on_pattern.shape[:-1]
-    ), f"{prec.shape} != {neuron_acts_on_pattern.shape[:-1]}"
+    assert prec.shape == neuron_acts_on_pattern.shape[:-1], f"{prec.shape} != {neuron_acts_on_pattern.shape[:-1]}"
 
     best_neuron_idx = np.unravel_index(prec.argmax(), prec.shape)
     best_prec = prec[best_neuron_idx]
     best_neuron_act_thresh = act_thresh[best_neuron_idx].item()
-    best_neuron_acts = neuron_acts_by_ex[
-        :, :, best_neuron_idx[0], best_neuron_idx[1], best_neuron_idx[2]
-    ]
+    best_neuron_acts = neuron_acts_by_ex[:, :, best_neuron_idx[0], best_neuron_idx[1], best_neuron_idx[2]]
     best_neuron_acts = best_neuron_acts >= best_neuron_act_thresh
     best_neuron_acts = np.stack(np.where(best_neuron_acts), axis=-1)
 
@@ -260,9 +241,7 @@ def get_codes_from_pattern(
         re_token_matches: number of tokens that match the regex pattern.
     """
     byte_ids = search_re(re_pattern, tokens_text, at_odd_even=at_odd_even)
-    token_pos_ids = [
-        byte_id_to_token_pos_id(ex_byte_id, token_byte_pos) for ex_byte_id in byte_ids
-    ]
+    token_pos_ids = [byte_id_to_token_pos_id(ex_byte_id, token_byte_pos) for ex_byte_id in byte_ids]
     token_pos_ids = np.unique(token_pos_ids, axis=0)
     re_token_matches = len(token_pos_ids)
     codebook_wise_codes = {}
@@ -326,9 +305,7 @@ def get_neurons_from_pattern(
         re_token_matches: number of tokens that match the regex pattern.
     """
     byte_ids = search_re(re_pattern, tokens_text, at_odd_even=at_odd_even)
-    token_pos_ids = [
-        byte_id_to_token_pos_id(ex_byte_id, token_byte_pos) for ex_byte_id in byte_ids
-    ]
+    token_pos_ids = [byte_id_to_token_pos_id(ex_byte_id, token_byte_pos) for ex_byte_id in byte_ids]
     token_pos_ids = np.unique(token_pos_ids, axis=0)
     re_token_matches = len(token_pos_ids)
     best_prec, best_neuron_acts, best_neuron_idx = get_neuron_precision_and_recall(

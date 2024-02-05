@@ -26,9 +26,7 @@ class GradientCheckerOptimizer(torch.optim.AdamW):
 )
 def test_train_codebook(config_name):
     """Test training codebook script."""
-    with hydra.initialize_config_module(
-        version_base=None, config_module="codebook_features.config"
-    ):
+    with hydra.initialize_config_module(version_base=None, config_module="codebook_features.config"):
         cfg = hydra.compose(config_name=config_name)
         ret = train_codebook.main(cfg)
         assert ret is not None
@@ -36,9 +34,7 @@ def test_train_codebook(config_name):
 
 def test_train_fsm_codebook():
     """Test training fsm codebook script."""
-    with hydra.initialize_config_module(
-        version_base=None, config_module="codebook_features.config"
-    ):
+    with hydra.initialize_config_module(version_base=None, config_module="codebook_features.config"):
         cfg = hydra.compose(config_name="test_fsm")
         ret = train_fsm_model.main(cfg)
         assert ret is not None
@@ -60,29 +56,24 @@ def test_straight_through_gradient_flows():
         max_train_samples=2,
     )
     model = transformers.AutoModelForCausalLM.from_pretrained("taufeeque/tiny-gpt2")
-    cb_config = models.CodebookModelConfig(
-        num_codes=10, k_codebook=2, layers_to_snap="all"
-    )
+    cb_config = models.CodebookModelConfig(num_codes=10, k_codebook=2, layers_to_snap="all")
     model = models.GPT2CodebookModel(model=model, config=cb_config)
     optimizer = GradientCheckerOptimizer(model.get_codebook_params())
     trainer, lm_dataset, _, last_checkpoint = run_clm.get_trainer_and_dataset(
         model_args, data_args, training_args, model, optimizers=(optimizer, None)
     )
-    metrics = run_clm.run_trainer(
-        model_args, data_args, training_args, trainer, lm_dataset, last_checkpoint
-    )
+    metrics = run_clm.run_trainer(model_args, data_args, training_args, trainer, lm_dataset, last_checkpoint)
     assert metrics is not None
 
 
 def test_model_saving():
     """Test that model is saved without any errors."""
-    with hydra.initialize_config_module(
-        version_base=None, config_module="codebook_features.config"
-    ):
+    with hydra.initialize_config_module(version_base=None, config_module="codebook_features.config"):
         cfg = hydra.compose(config_name="test")
         with omegaconf.open_dict(cfg):
             cfg.get_baseline = False
             cfg.training_args.save_steps = 1
             cfg.training_args.max_steps = 2
+            cfg.training_args.report_to = "wandb"
         ret = train_codebook.main(cfg)
         assert ret is not None

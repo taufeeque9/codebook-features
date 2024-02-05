@@ -1,6 +1,5 @@
 """Utility functions for running webapp using streamlit."""
 
-
 from typing import Optional
 
 import numpy as np
@@ -58,7 +57,7 @@ def load_code_search_cache(codes_cache_path, dataset_cache_path):
 
 
 @st.cache_data(max_entries=100)
-def load_ft_tkns(model_id, layer, head=None, code=None):
+def load_ft_tkns(model_id, layer, head=None, code=None, topk=1):
     """Load the code-to-token map for a codebook."""
     # model_id required to not mix cache_data for different models
     assert model_id is not None
@@ -74,6 +73,7 @@ def load_ft_tkns(model_id, layer, head=None, code=None):
         cb_acts,
         num_codes=st.session_state["num_codes"],
         code=code,
+        topk=topk,
     )
 
 
@@ -85,11 +85,12 @@ def get_code_acts(
     head=None,
     ctx_size=5,
     num_examples=100,
+    topk=1,
     return_example_list=False,
     is_fsm=False,
 ):
     """Get the token activations for a given code."""
-    ft_tkns = load_ft_tkns(model_id, layer, head, code)
+    ft_tkns = load_ft_tkns(model_id, layer, head, code, topk=topk)
     ft_tkns = [ft_tkns]
     _, freqs, acts = utils.print_token_activations_of_codes(
         ft_tkns,
@@ -104,13 +105,13 @@ def get_code_acts(
     return acts[0], freqs[0]
 
 
-def set_ct_acts(code, layer, head=None, extra_args=None, is_attn=False):
+def set_ct_acts(code, layer, head=None, extra_args=None, multiple_cbs=False):
     """Set the code and layer for the token activations."""
     # convert to int
     code, layer, head = int(code), int(layer), int(head) if head is not None else None
     st.session_state["ct_act_code"] = code
     st.session_state["ct_act_layer"] = layer
-    if is_attn:
+    if multiple_cbs:
         st.session_state["ct_act_head"] = head
     st.session_state["filter_codes"] = False
 
@@ -214,8 +215,8 @@ def add_save_code_button(
     description = st.session_state.get(f"save_code_desc{button_key_suffix}", None)
     if description:
         layer = st.session_state["ct_act_layer"]
-        is_attn = st.session_state["is_attn"]
-        if is_attn:
+        multiple_cbs = st.session_state["multiple_cbs"]
+        if multiple_cbs:
             head = st.session_state["ct_act_head"]
         else:
             head = None

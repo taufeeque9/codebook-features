@@ -1,4 +1,5 @@
 """Model classes where codebook is applied by modifying the forward pass of the model."""
+
 from typing import Optional, Tuple, Union
 
 import einops
@@ -19,7 +20,6 @@ class PreResidualCodebookGPT2Block(modeling_gpt2.GPT2Block):
         assert not config.add_cross_attention, "Not implemented"
         super().__init__(config, layer_idx)
         self.codebook_layer = codebook_layer
-        self.snap = True
 
     def forward(
         self,
@@ -71,16 +71,14 @@ class PreResidualCodebookGPT2Block(modeling_gpt2.GPT2Block):
             attn_output = cross_attn_outputs[0]
             # residual connection
             hidden_states = residual + attn_output
-            outputs = (
-                outputs + cross_attn_outputs[2:]
-            )  # add cross attentions if we output attention weights
+            outputs = outputs + cross_attn_outputs[2:]  # add cross attentions if we output attention weights
 
         # residual = hidden_states
         hidden_states = self.ln_2(hidden_states)
         feed_forward_hidden_states = self.mlp(hidden_states)
         # residual connection
         main_stream = feed_forward_hidden_states + attn_output
-        if self.codebook_layer and self.snap:
+        if self.codebook_layer:
             main_stream = self.codebook_layer(main_stream)
         hidden_states = residual + main_stream
 
@@ -100,7 +98,6 @@ class PreResidualCodebookGPTNeoXBlock(modeling_gpt_neox.GPTNeoXLayer):
         assert not config.add_cross_attention, "Not implemented"
         super().__init__(config)
         self.codebook_layer = codebook_layer
-        self.snap = True
         self.layer_idx = layer_idx
 
     def forward(
@@ -130,7 +127,7 @@ class PreResidualCodebookGPTNeoXBlock(modeling_gpt_neox.GPTNeoXLayer):
             # x = x + attn(ln1(x)) + mlp(ln2(x))
             mlp_output = self.mlp(self.post_attention_layernorm(hidden_states))
             main_stream = mlp_output + attn_output
-            if self.codebook_layer and self.snap:
+            if self.codebook_layer:
                 main_stream = self.codebook_layer(main_stream)
             hidden_states = main_stream + hidden_states
         else:
@@ -138,18 +135,14 @@ class PreResidualCodebookGPTNeoXBlock(modeling_gpt_neox.GPTNeoXLayer):
             # x = x + attn(ln1(x))
             # x = x + mlp(ln2(x))
             # attn_output = attn_output + hidden_states
-            mlp_output = self.mlp(
-                self.post_attention_layernorm(attn_output + hidden_states)
-            )
+            mlp_output = self.mlp(self.post_attention_layernorm(attn_output + hidden_states))
             main_stream = mlp_output + attn_output
-            if self.codebook_layer and self.snap:
+            if self.codebook_layer:
                 main_stream = self.codebook_layer(main_stream)
             hidden_states = main_stream + hidden_states
 
         if use_cache:
-            outputs = (
-                hidden_states,
-            ) + outputs  # hidden_states, present, (attn_weights)
+            outputs = (hidden_states,) + outputs  # hidden_states, present, (attn_weights)
         else:
             outputs = (hidden_states,) + outputs[1:]  # hidden_states, (attn_weights)
 
@@ -162,7 +155,6 @@ class PreProjectionAttentionCodebookGPT2(modeling_gpt2.GPT2Attention):
     def __init__(self, config, layer_idx=None, codebook_layer=None):
         """Initialize the attention layer."""
         super().__init__(config, is_cross_attention=False)
-        self.snap = True
         self.layer_idx = layer_idx
         self.codebook_layer = codebook_layer
 
@@ -186,9 +178,7 @@ class PreProjectionAttentionCodebookGPT2(modeling_gpt2.GPT2Attention):
                 )
 
             query = self.q_attn(hidden_states)
-            key, value = self.c_attn(encoder_hidden_states).split(
-                self.split_size, dim=2
-            )
+            key, value = self.c_attn(encoder_hidden_states).split(self.split_size, dim=2)
             attention_mask = encoder_attention_mask
         else:
             query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
@@ -208,17 +198,13 @@ class PreProjectionAttentionCodebookGPT2(modeling_gpt2.GPT2Attention):
             present = None
 
         if self.reorder_and_upcast_attn:
-            attn_output, attn_weights = self._upcast_and_reordered_attn(
-                query, key, value, attention_mask, head_mask
-            )
+            attn_output, attn_weights = self._upcast_and_reordered_attn(query, key, value, attention_mask, head_mask)
         else:
-            attn_output, attn_weights = self._attn(
-                query, key, value, attention_mask, head_mask
-            )
+            attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
 
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
 
-        if self.codebook_layer is not None and self.snap:
+        if self.codebook_layer is not None:
             attn_output = self.codebook_layer(attn_output)
 
         attn_output = self.c_proj(attn_output)
@@ -238,7 +224,6 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
         """Initialize the attention layer."""
         super().__init__(config)
         self.codebook_layer = codebook_layer
-        self.snap = True
         self.layer_idx = layer_idx
 
     def forward(
@@ -280,9 +265,7 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
         if has_layer_past:
             seq_len += layer_past[0].shape[-2]
         cos, sin = self.rotary_emb(value, seq_len=seq_len)
-        query, key = modeling_gpt_neox.apply_rotary_pos_emb(
-            query_rot, key_rot, cos, sin, position_ids
-        )
+        query, key = modeling_gpt_neox.apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
         query = torch.cat((query, query_pass), dim=-1)
         key = torch.cat((key, key_pass), dim=-1)
 
@@ -295,16 +278,12 @@ class PreProjectionAttentionCodebookGPTNeoX(modeling_gpt_neox.GPTNeoXAttention):
         present = (key, value) if use_cache else None
 
         # Compute attention
-        attn_output, attn_weights = self._attn(
-            query, key, value, attention_mask, head_mask
-        )
+        attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
 
         # Reshape outputs
-        attn_output = self._merge_heads(
-            attn_output, self.num_attention_heads, self.head_size
-        )
+        attn_output = self._merge_heads(attn_output, self.num_attention_heads, self.head_size)
 
-        if self.codebook_layer is not None and self.snap:
+        if self.codebook_layer is not None:
             attn_output = self.codebook_layer(attn_output)
 
         attn_output = self.dense(attn_output)
@@ -323,7 +302,6 @@ class PreProjectionAttentionCodebookGPTNeo(modeling_gpt_neo.GPTNeoSelfAttention)
         """Initialize the attention layer."""
         super().__init__(config, attention_type)
         self.codebook_layer = codebook_layer
-        self.snap = True
         self.layer_idx = layer_idx
 
     def forward(
@@ -355,13 +333,11 @@ class PreProjectionAttentionCodebookGPTNeo(modeling_gpt_neo.GPTNeoSelfAttention)
         else:
             present = None
 
-        attn_output, attn_weights = self._attn(
-            query, key, value, attention_mask, head_mask
-        )
+        attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
 
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
 
-        if self.codebook_layer is not None and self.snap:
+        if self.codebook_layer is not None:
             attn_output = self.codebook_layer(attn_output)
 
         attn_output = self.out_proj(attn_output)
@@ -381,7 +357,6 @@ class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
         """Initialize the attention layer."""
         super().__init__(config, layer_id=layer_idx)
         self.codebook_layer = codebook_layer
-        self.snap = True
         self.layer_idx = layer_idx
 
     def forward(
@@ -482,7 +457,7 @@ class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
             )
         )  # [batch, pos, head_index, d_head]
 
-        if self.codebook_layer is not None and self.snap:
+        if self.codebook_layer is not None:
             z = self.codebook_layer(z)
 
         if not self.cfg.use_attn_result:
@@ -511,9 +486,6 @@ class PreProjectionAttentionCodebookHookedTransformer(tl_components.Attention):
                 )
             )  # [batch, pos, head_index, d_model]
             out = (
-                einops.reduce(
-                    result, "batch position index model->batch position model", "sum"
-                )
-                + self.b_O
+                einops.reduce(result, "batch position index model->batch position model", "sum") + self.b_O
             )  # [batch, pos, d_model]
         return out
