@@ -93,7 +93,7 @@ class ModelInfoForWebapp:
     cb_at: str
     gcb: str
     n_layers: int
-    n_heads: Optional[int] = None
+    n_grps: Optional[int] = None
     seed: int = 42
     max_samples: int = 2000
 
@@ -101,10 +101,10 @@ class ModelInfoForWebapp:
         """Convert to correct types."""
         self.num_codes = int(self.num_codes)
         self.n_layers = int(self.n_layers)
-        if self.n_heads == "None":
-            self.n_heads = None
-        elif self.n_heads is not None:
-            self.n_heads = int(self.n_heads)
+        if self.n_grps == "None":
+            self.n_grps = None
+        elif self.n_grps is not None:
+            self.n_grps = int(self.n_grps)
         self.seed = int(self.seed)
         self.max_samples = int(self.max_samples)
 
