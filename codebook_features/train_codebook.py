@@ -64,9 +64,7 @@ def get_baseline(training_args, model_args, data_args, model):
         model,
     )
     model = torch.compile(model)
-    baseline_metrics = run_clm.run_trainer(
-        model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
-    )
+    baseline_metrics = run_clm.run_trainer(model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint)
     baseline_metrics = {"baseline/" + k: v for k, v in baseline_metrics.items()}
     with open(baseline_output_dir + "/metrics.json", "w") as f:
         json.dump(baseline_metrics, f)
@@ -133,8 +131,10 @@ def main(cfg):
             tags=tags,
             settings=wandb.Settings(code_dir="."),
             config=cfg_dict,
+            dir=training_args.output_dir,
         )
         wandb_initilized = True
+        training_args.output_dir = wandb.run.dir + "/train_output"
 
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
@@ -158,9 +158,7 @@ def main(cfg):
 
     callbacks = [cb_trainer.WandbCallback()] if wandb_initilized else []
     if cfg.k_scheduler_kwargs is not None:
-        k_scheduler = cb_trainer.MulticodeKScheduler(
-            k_min=cfg.codebook_args.k_codebook, **cfg.k_scheduler_kwargs
-        )
+        k_scheduler = cb_trainer.MulticodeKScheduler(k_min=cfg.codebook_args.k_codebook, **cfg.k_scheduler_kwargs)
         callbacks.append(k_scheduler)
 
     trainer, lm_datasets, _, last_checkpoint = run_clm.get_trainer_and_dataset(
@@ -179,9 +177,7 @@ def main(cfg):
     # compile doesn't work on Windows or python 3.11+ currently
     if os.name != "nt" and sys.version_info < (3, 11):
         model = torch.compile(model)
-    metrics = run_clm.run_trainer(
-        model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint
-    )
+    metrics = run_clm.run_trainer(model_args, data_args, training_args, trainer, lm_datasets, last_checkpoint)
 
     return metrics
 

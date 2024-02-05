@@ -74,7 +74,7 @@ def redirect_to_main_with_code(code, layer, head):
     """Redirect to main page with the given code."""
     st.session_state["ct_act_code"] = code
     st.session_state["ct_act_layer"] = layer
-    if st.session_state["is_attn"]:
+    if st.session_state["multiple_cbs"]:
         st.session_state["ct_act_head"] = head
     switch_page("Code Browser")
 
@@ -95,12 +95,10 @@ def show_examples_for_topic_code(code, layer, head, code_act_ratio=0.3):
         if num_acts > seq_len * code_act_ratio:
             filt_ex_acts.append(act_str)
     st.markdown("#### Examples for Code")
-    st.markdown(
-        webapp_utils.escape_markdown("".join(filt_ex_acts)), unsafe_allow_html=True
-    )
+    st.markdown(webapp_utils.escape_markdown("".join(filt_ex_acts)), unsafe_allow_html=True)
 
 
-is_attn = st.session_state["is_attn"]
+multiple_cbs = st.session_state["multiple_cbs"]
 
 st.markdown("## Topic Code")
 topic_code_description = (
@@ -129,9 +127,7 @@ recall_threshold = r_col.slider(
     key="recall",
     help="Recall Threshold is the minimum fraction of tokens in the example that the code must activate on.",
 )
-example_truncation = trunc_col.number_input(
-    "Max Output Chars", 0, 102400, 1024, key="max_chars"
-)
+example_truncation = trunc_col.number_input("Max Output Chars", 0, 102400, 1024, key="max_chars")
 sort_by_options = ["Precision", "Recall", "Num Acts"]
 sort_by_name = sort_col.radio(
     "Sort By",
@@ -155,10 +151,10 @@ st.markdown("### Example Text")
 trunc_suffix = "..." if example_truncation < len(tokens_text[example_id]) else ""
 st.write(tokens_text[example_id][:example_truncation] + trunc_suffix)
 
-cols = st.columns(7 if is_attn else 6)
+cols = st.columns(7 if multiple_cbs else 6)
 cols[0].markdown("Search", help="Button to see token activations for the code.")
 cols[1].write("Layer")
-if is_attn:
+if multiple_cbs:
     cols[2].write("Head")
 cols[-4].write("Code")
 cols[-3].write("Precision")
@@ -169,22 +165,18 @@ cols[-1].markdown(
 )
 
 all_codes = get_example_topic_codes(example_id)
-all_codes = [
-    (cb_name, code_pr_info)
-    for cb_name, code_pr_infos in all_codes
-    for code_pr_info in code_pr_infos
-]
+all_codes = [(cb_name, code_pr_info) for cb_name, code_pr_infos in all_codes for code_pr_info in code_pr_infos]
 all_codes = sorted(all_codes, key=lambda x: x[1][1 + sort_by], reverse=True)
 
 for cb_name, (code, p, r, acts) in all_codes:
-    cols = st.columns(7 if is_attn else 6)
+    cols = st.columns(7 if multiple_cbs else 6)
     code_button = cols[0].button(
         "🔍",
         key=f"ex-code-{code}-{cb_name}",
     )
     layer, head = code_search_utils.get_layer_head_from_adv_name(cb_name)
     cols[1].write(str(layer))
-    if is_attn:
+    if multiple_cbs:
         cols[2].write(str(head))
 
     cols[-4].write(code)

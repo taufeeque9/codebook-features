@@ -130,13 +130,11 @@ def logits_to_pred(logits, tokenizer, k=5):
     sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
     probs = sorted_logits.softmax(dim=-1)
     topk_preds = [tokenizer.convert_ids_to_tokens(e) for e in sorted_indices[:, -1, :k]]
-    topk_preds = [
-        tokenizer.convert_tokens_to_string([e]) for batch in topk_preds for e in batch
-    ]
+    topk_preds = [tokenizer.convert_tokens_to_string([e]) for batch in topk_preds for e in batch]
     return [(topk_preds[i], probs[:, -1, i].item()) for i in range(len(topk_preds))]
 
 
-def features_to_tokens(cb_key, cb_acts, num_codes, code=None):
+def features_to_tokens(cb_key, cb_acts, num_codes, code=None, topk=1):
     """Return the set of token ids each codebook feature activates on."""
     codebook_ids = cb_acts[cb_key]
 
@@ -147,7 +145,7 @@ def features_to_tokens(cb_key, cb_acts, num_codes, code=None):
                 for k in range(codebook_ids.shape[2]):
                     features_tokens[codebook_ids[i, j, k]].append((i, j))
     else:
-        idx0, idx1, _ = np.where(codebook_ids == code)
+        idx0, idx1, _ = np.where(codebook_ids[:, :, :topk] == code)
         features_tokens = list(zip(idx0, idx1))
 
     return features_tokens
@@ -192,18 +190,12 @@ def color_tokens(tokens, color_idx, n=3, html=False):
         if i <= last_colored_token_idx + 2 * n + 1:
             ret_string += "".join(tokens[last_colored_token_idx + 1 : i])
         else:
-            ret_string += "".join(
-                tokens[last_colored_token_idx + 1 : last_colored_token_idx + n + 1]
-            )
+            ret_string += "".join(tokens[last_colored_token_idx + 1 : last_colored_token_idx + n + 1])
             ret_string += " ... "
             ret_string += "".join(tokens[i - n : i])
         ret_string += color_str(c_str, html)
         last_colored_token_idx = i
-    ret_string += "".join(
-        tokens[
-            last_colored_token_idx + 1 : min(last_colored_token_idx + n, len(tokens))
-        ]
-    )
+    ret_string += "".join(tokens[last_colored_token_idx + 1 : min(last_colored_token_idx + n, len(tokens))])
     return ret_string
 
 
@@ -216,11 +208,7 @@ def prepare_example_print(
 ):
     """Format example to print."""
     example_output = color_str(example_id, html, "green")
-    example_output += (
-        ": "
-        + color_fn(example_tokens, tokens_to_color, html=html)
-        + ("<br>" if html else "\n")
-    )
+    example_output += ": " + color_fn(example_tokens, tokens_to_color, html=html) + ("<br>" if html else "\n")
     return example_output
 
 
@@ -380,12 +368,10 @@ def run_model_fn_with_codes(
     if fn_kwargs is None:
         fn_kwargs = {}
     hook_fns = [
-        partial(patch_in_codes, pos=tupl.pos, code=tupl.code, code_pos=tupl.code_pos)
-        for tupl in list_of_code_infos
+        partial(patch_in_codes, pos=tupl.pos, code=tupl.code, code_pos=tupl.code_pos) for tupl in list_of_code_infos
     ]
     fwd_hooks = [
-        (get_cb_hook_key(tupl.cb_at, tupl.layer, tupl.head), hook_fns[i])
-        for i, tupl in enumerate(list_of_code_infos)
+        (get_cb_hook_key(tupl.cb_at, tupl.layer, tupl.head), hook_fns[i]) for i, tupl in enumerate(list_of_code_infos)
     ]
     cb_model.reset_hook_kwargs()
     with cb_model.hooks(fwd_hooks, [], True, False) as hooked_model:

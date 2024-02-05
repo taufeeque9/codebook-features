@@ -1,48 +1,47 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
-# Linting
-- repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.4.0
-  hooks:
-  - id: check-ast
-  - id: trailing-whitespace
-  - id: end-of-file-fixer
-    exclude_types: [jupyter]
-  - id: check-toml
-  - id: check-added-large-files
-- repo: https://github.com/psf/black
-  rev: 23.9.1
-  hooks:
-  - id: black
-  - id: black-jupyter
-# Python static analysis
-- repo: https://github.com/charliermarsh/ruff-pre-commit
-  # Ruff version.
-  rev: 'v0.0.288'
-  hooks:
-    - id: ruff
-# Shell static analysis
-- repo: https://github.com/koalaman/shellcheck-precommit
-  rev: v0.9.0
-  hooks:
-  - id: shellcheck
-  # precommit invokes shellcheck once per file. shellcheck complains if file
-  # includes another file not given on the command line. Ignore this, since
-  # they'll just get checked in a separate shellcheck invocation.
-    args: ["-e", "SC1091"]
-# Misc
-- repo: https://github.com/codespell-project/codespell
-  rev: v2.2.5
-  hooks:
-  - id: codespell
-    args: ["--skip=*.lock,*.pyc,tests/testdata/*,*.ipynb,*.csv","--ignore-words-list=codebook"]
-# Hooks that run in local environment (not isolated venv) as they need
-# same dependencies as our package.
--   repo: https://github.com/pre-commit/mirrors-mypy
+  # Linting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: check-ast
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+        exclude_types: [jupyter]
+      - id: check-toml
+      - id: check-added-large-files
+  # Python static analysis
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    # Ruff version.
+    rev: "v0.0.288"
+    hooks:
+      - id: ruff
+  # Shell static analysis
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.9.0
+    hooks:
+      - id: shellcheck
+        # precommit invokes shellcheck once per file. shellcheck complains if file
+        # includes another file not given on the command line. Ignore this, since
+        # they'll just get checked in a separate shellcheck invocation.
+        args: ["-e", "SC1091"]
+  # Misc
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.2.5
+    hooks:
+      - id: codespell
+        args:
+          [
+            "--skip=*.lock,*.pyc,tests/testdata/*,*.ipynb,*.csv",
+            "--ignore-words-list=codebook",
+          ]
+  # Hooks that run in local environment (not isolated venv) as they need
+  # same dependencies as our package.
+  - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.5.1
     hooks:
-    -   id: mypy
+      - id: mypy
         args: [--follow-imports=skip]
 
 exclude: (mod_model_classes.py|tl_mods.py|run_clm.py)

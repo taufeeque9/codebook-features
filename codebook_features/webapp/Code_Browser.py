@@ -50,7 +50,10 @@ dirs = glob.glob(base_cache_dir + "*/")
 model_name_options = [d.split("/")[-2].split("_")[:-2] for d in dirs]
 model_name_options = ["_".join(m) for m in model_name_options]
 model_name_options = sorted(set(model_name_options))
-def_model_idx = ["attn" in m.lower() for m in model_name_options].index(True)
+try:
+    def_model_idx = ["attn" in m.lower() for m in model_name_options].index(True)
+except ValueError:
+    def_model_idx = 0
 
 model_name = st.selectbox(
     "Model",
@@ -72,8 +75,7 @@ num_layers = model_info.n_layers
 num_heads = model_info.n_heads
 cb_at = model_info.cb_at
 gcb = model_info.gcb
-gcb = "_gcb" if gcb else ""
-is_attn = "attn" in cb_at
+multiple_cbs = not (gcb == "_vcb" or gcb == "")
 
 (
     tokens_str,
@@ -83,6 +85,7 @@ is_attn = "attn" in cb_at
     act_count_ft_tkns,
     metrics,
 ) = webapp_utils.load_code_search_cache(cache_path, cache_path)
+k_codebook = next(iter(cb_acts.values())).shape[2]
 seq_len = len(tokens_str[0])
 metric_keys = ["eval_loss", "eval_accuracy", "eval_dead_code_fraction"]
 metrics = {k: v for k, v in metrics.items() if k.split("/")[0] in metric_keys}
@@ -98,7 +101,7 @@ st.session_state["act_count_ft_tkns"] = act_count_ft_tkns
 st.session_state["num_codes"] = num_codes
 st.session_state["gcb"] = gcb
 st.session_state["cb_at"] = cb_at
-st.session_state["is_attn"] = is_attn
+st.session_state["multiple_cbs"] = multiple_cbs
 st.session_state["seq_len"] = seq_len
 
 
@@ -129,13 +132,13 @@ if st.checkbox("Show Demo Codes"):
     code_desc, code_regex = "", ""
     demo_codes = [code.strip() for code in demo_codes if code.strip()]
 
-    num_cols = 6 if is_attn else 5
+    num_cols = 6 if multiple_cbs else 5
     cols = st.columns([1] * (num_cols - 1) + [2])
     # st.markdown(button_height_style, unsafe_allow_html=True)
     cols[0].markdown("Search", help="Button to see token activations for the code.")
     cols[1].write("Code")
     cols[2].write("Layer")
-    if is_attn:
+    if multiple_cbs:
         cols[3].write("Head")
     cols[-2].markdown(
         "Num Acts",
@@ -177,11 +180,11 @@ if st.checkbox("Show Demo Codes"):
         )
         if button_clicked:
             webapp_utils.set_ct_acts(
-                code_info.code, code_info.layer, code_info.head, None, is_attn
+                code_info.code, code_info.layer, code_info.head, None, multiple_cbs
             )
         cols[1].write(code_info.code)
         cols[2].write(str(code_info.layer))
-        if is_attn:
+        if multiple_cbs:
             cols[3].write(str(code_info.head))
         cols[-2].write(str(act_count_ft_tkns[comp_info][code_info.code]))
         cols[-1].write(code_desc)
@@ -253,7 +256,7 @@ if st.checkbox("Search with Regex"):
             f"Found <span style='color:green;'>{re_token_matches}</span> matches",
             unsafe_allow_html=True,
         )
-        num_search_cols = 7 if is_attn else 6
+        num_search_cols = 7 if multiple_cbs else 6
         non_deploy_offset = 0
         if not deploy:
             non_deploy_offset = 1
@@ -263,7 +266,7 @@ if st.checkbox("Search with Regex"):
 
         cols[0].markdown("Search", help="Button to see token activations for the code.")
         cols[1].write("Layer")
-        if is_attn:
+        if multiple_cbs:
             cols[2].write("Head")
         cols[-4 - non_deploy_offset].write("Code")
         cols[-3 - non_deploy_offset].write("Precision")
@@ -300,9 +303,9 @@ if st.checkbox("Search with Regex"):
             }
             button_clicked = cols[0].button("🔍", key=button_key)
             if button_clicked:
-                webapp_utils.set_ct_acts(code, layer, head, extra_args, is_attn)
+                webapp_utils.set_ct_acts(code, layer, head, extra_args, multiple_cbs)
             cols[1].write(layer)
-            if is_attn:
+            if multiple_cbs:
                 cols[2].write(head)
             cols[-4 - non_deploy_offset].write(code)
             cols[-3 - non_deploy_offset].write(f"{prec*100:.2f}%")
@@ -344,10 +347,21 @@ if filter_codes:
         key="ct_act_range",
         help="Filter codes by the number of tokens they activate on.",
     )
+if k_codebook > 1:
+    topk = st.slider(
+        "Top K",
+        1,
+        k_codebook,
+        1,
+        key="ct_act_topk",
+        help="Considers only those tokens where the code was in the top=k chosen codes.",
+    )
+else:
+    topk = 1
 
-cols = st.columns(5 if is_attn else 4)
+cols = st.columns(5 if multiple_cbs else 4)
 layer = cols[0].number_input("Layer", 0, num_layers - 1, 0, key="ct_act_layer")
-if is_attn:
+if multiple_cbs:
     head = cols[1].number_input("Head", 0, num_heads - 1, 0, key="ct_act_head")
 else:
     head = None
@@ -391,6 +405,7 @@ acts, acts_count = webapp_utils.get_code_acts(
     head,
     ctx_size,
     num_examples,
+    topk=topk,
     is_fsm=is_fsm,
 )
 
