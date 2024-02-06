@@ -965,7 +965,9 @@ class CodebookWrapper(nn.Module, abc.ABC):
         """Get attribute from the wrapped module."""
         try:
             return super().__getattr__(name)
-        except AttributeError:
+        except AttributeError as e:
+            if name == "module_layer":
+                raise AttributeError(f"module_layer not found in {self.__class__.__name__}") from e
             return getattr(self.module_layer, name)
 
 
@@ -1318,7 +1320,13 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
                     codebook_method = CODEBOOK_METHODS.get(cb_at)
                     if codebook_method is not None:
                         method = getattr(self, codebook_method)
-                        codebooks_in_layer[cb_at] = method(layers, i, i_cb)
+                        if cb_at == "qkv":
+                            qkv_codebooks = method(layers, i, i_cb)
+                            codebooks_in_layer["q"] = qkv_codebooks[0]
+                            codebooks_in_layer["k"] = qkv_codebooks[1]
+                            codebooks_in_layer["v"] = qkv_codebooks[2]
+                        else:
+                            codebooks_in_layer[cb_at] = method(layers, i, i_cb)
 
                 if not codebooks_in_layer:
                     raise ValueError(f"Invalid value for `codebook_at`: {self.config.codebook_at}.")
@@ -1388,9 +1396,16 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
         return wrapped_hidden_layer.codebook_layer
 
     def codebook_at_qkv(self, layers, i, i_cb):
-        """Add a separate codebook at each of the q, k, v layers."""
-        attn = layers[i].__getattr__(self.attention_key)
-        qkv = attn.__getattr__(self.qkv_key)
+        """Add codebook at the q, k, v layers."""
+        if isinstance(self.qkv_key, str):
+            return self.codebook_at_combined_qkv(layers, i, i_cb)
+        return self.codebook_at_separate_qkv(layers, i, i_cb)
+
+    def codebook_at_combined_qkv(self, layers, i, i_cb):
+        """Add a group codebook on the output of the combined q, k, v layer."""
+        assert isinstance(self.qkv_key, str)
+        attn = recursively_getattr(layers[i], self.attention_key)
+        qkv = recursively_getattr(attn, self.qkv_key)
         wrapped_hidden_layer = MLPWrapper(
             qkv,
             codebook_cls=GroupCodebookLayer,
@@ -1404,11 +1419,40 @@ class CodebookModel(transformers.PreTrainedModel, abc.ABC):
             kcodes=self.config.k_codebook[i_cb],
             **self.config.codebook_kwargs,
         )
-        attn.__setattr__(self.qkv_key, wrapped_hidden_layer)
+        setattr(attn, self.qkv_key, wrapped_hidden_layer)
         self.codebook_params += list(
             wrapped_hidden_layer.codebook_layer.codebook.parameters(),
         )
         return wrapped_hidden_layer.codebook_layer
+
+    def codebook_at_separate_qkv(self, layers, i, i_cb):
+        """Add a separate codebook at each of the distinct q, k, v layers."""
+        assert isinstance(self.qkv_key, Union[list, tuple]) and len(self.qkv_key) == 3
+        attn = recursively_getattr(layers[i], self.attention_key)
+        qkvs = ["q", "k", "v"]
+        all_qkv_codebooks = []
+        for q_or_k_or_v, key in zip(qkvs, self.qkv_key):
+            assert q_or_k_or_v in key.lower()
+            wrapped_hidden_layer = MLPWrapper(
+                recursively_getattr(attn, key),
+                codebook_cls=self.codebook_cls[i_cb],
+                dim=self.d_model,
+                num_codes=self.config.num_codes[i_cb],
+                key=f"layer{i}_{q_or_k_or_v}",
+                snap_fn=self.snap_fn,
+                num_codebooks=self.config.num_codebooks[i_cb],
+                kmeans_init=self.config.kmeans_init,
+                kmeans_kwargs=self.config.kmeans_kwargs,
+                kcodes=self.config.k_codebook[i_cb],
+                **self.config.codebook_kwargs,
+            )
+            delattr(attn, key)
+            setattr(attn, key, wrapped_hidden_layer)
+            self.codebook_params += list(
+                wrapped_hidden_layer.codebook_layer.codebook.parameters(),
+            )
+            all_qkv_codebooks.append(wrapped_hidden_layer.codebook_layer)
+        return all_qkv_codebooks
 
     def codebook_at_attention(self, layers, i, i_cb):
         """Add codebook at the output of the attention layer."""
@@ -1926,6 +1970,11 @@ class GPTNeoCodebookModel(CodebookModel):
         return "attn.attention"
 
     @property
+    def qkv_key(self):
+        """Returns the attribute names used for qkv in the model."""
+        return ["q_proj", "k_proj", "v_proj"]
+
+    @property
     def mlp_key(self):
         """Returns the attribute name used for mlp in the model."""
         return "mlp"
@@ -1977,12 +2026,13 @@ class HookedTransformerCodebookModel(CodebookModel):
             base_model_config: config for the base model on which HookedTransformer is applied.
         """
         # get config key values from original class
-        for k, v in base_model_config.__dict__.items():
-            if k not in model.cfg.__dict__:
-                model.cfg.__setattr__(k, v)
-        for k1, k2 in base_model_config.attribute_map.items():
-            if k1 not in model.cfg.__dict__:
-                model.cfg.__setattr__(k1, base_model_config.__getattribute__(k2))
+        if base_model_config is not None:
+            for k, v in base_model_config.__dict__.items():
+                if k not in model.cfg.__dict__:
+                    model.cfg.__setattr__(k, v)
+            for k1, k2 in base_model_config.attribute_map.items():
+                if k1 not in model.cfg.__dict__:
+                    model.cfg.__setattr__(k1, base_model_config.__getattribute__(k2))
         super().__init__(
             config=config,
             model=model,
@@ -2008,6 +2058,11 @@ class HookedTransformerCodebookModel(CodebookModel):
     def attention_key(self):
         """Returns the attribute name used for attention in the model."""
         return "attn"
+
+    @property
+    def qkv_key(self):
+        """Returns the attribute names used for qkv in the model."""
+        return ["W_Q", "W_K", "W_V"]
 
     @property
     def mlp_key(self):
@@ -2078,6 +2133,19 @@ def wrap_codebook(model_or_path, config=None, pretrained_path=None):
     return cb_model_cls(config=config, model=model)
 
 
+def map_key(key, orig_cb_model, hooked_model):
+    """Map the key from original model to the codebook model."""
+    key = key.replace(orig_cb_model.attention_key, hooked_model.attention_key)
+    key = key.replace(orig_cb_model.mlp_key, hooked_model.mlp_key)
+    if isinstance(orig_cb_model.qkv_key, str):
+        key = key.replace(orig_cb_model.qkv_key, hooked_model.qkv_key)
+    else:
+        for k1, k2 in zip(orig_cb_model.qkv_key, hooked_model.qkv_key):
+            key = key.replace(k1, k2)
+    key = key.replace(orig_cb_model.mlp_mid_key, hooked_model.mlp_mid_key)
+    return key
+
+
 def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs=None):
     """Wrap a hooked tranformer model with codebooks."""
     if hooked_kwargs is None:
@@ -2098,12 +2166,12 @@ def convert_to_hooked_model(model_path, orig_cb_model, hooked_kwargs=None):
 
     for key, value in orig_cb_model.model.state_dict().items():
         if "codebook" in key:
-            key = key.replace(orig_cb_model.attention_key, cb_model.attention_key)
-            key = key.replace(orig_cb_model.mlp_key, cb_model.mlp_key)
-            split_key = re.split(r"(\d+)", key)
+            new_key = map_key(key, orig_cb_model, cb_model)
+            split_key = re.split(r"(\d+)", new_key)
             split_key[0] = "blocks."
             cb_sd["".join(split_key)] = value
     _, unexpected = cb_model.model.load_state_dict(cb_sd, strict=False)
+    print("Unexpected keys in state dict: ", unexpected)
     assert len(unexpected) == 0
     cb_model.model.setup()
     return cb_model
@@ -2141,3 +2209,11 @@ def convert_to_hooked_model_for_tokfsm(
     assert len(unexpected) == 0
     cb_model.model.setup()
     return cb_model
+
+
+def recursively_getattr(obj, attr):
+    """Recursively get attribute from the object."""
+    if "." in attr:
+        first_attr, rest = attr.split(".", 1)
+        return recursively_getattr(getattr(obj, first_attr), rest)
+    return getattr(obj, attr)
