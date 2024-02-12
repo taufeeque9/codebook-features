@@ -134,7 +134,8 @@ def main(cfg):
             dir=training_args.output_dir,
         )
         wandb_initilized = True
-        training_args.output_dir = wandb.run.dir + "/train_output"
+        training_args.output_dir = pathlib.Path(wandb.run.dir).parent / "train_output"
+        training_args.output_dir = str(training_args.output_dir)
 
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
